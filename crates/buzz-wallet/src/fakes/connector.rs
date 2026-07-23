@@ -1,21 +1,20 @@
 //! Scriptable [`WalletConnector`](crate::ports::WalletConnector).
 
 use crate::error::WalletError;
-use crate::fakes::wallet::FakeWalletService;
 use crate::ports::{WalletConnector, WalletService};
 use crate::types::Capabilities;
 use async_trait::async_trait;
+use std::fmt;
 use std::future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Scripted outcome for one `connect` call.
-#[derive(Debug)]
 pub enum ConnectorScript {
     /// Succeed with a service, capabilities, and optional lud16.
     Succeed {
-        /// Service handed to the caller (usually a scripted [`FakeWalletService`]).
-        service: Arc<FakeWalletService>,
+        /// Service handed to the caller (usually a scripted [`crate::fakes::FakeWalletService`]).
+        service: Arc<dyn WalletService>,
         /// Link-time capability set (`13194 ∩ get_info.methods`).
         capabilities: Capabilities,
         /// Lightning Address from the NWC URI query param, if any.
@@ -32,6 +31,29 @@ pub enum ConnectorScript {
     },
     /// Pending future that never resolves (connect timeout scenarios).
     NeverRespond,
+}
+
+impl fmt::Debug for ConnectorScript {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Succeed {
+                capabilities,
+                lud16,
+                ..
+            } => f
+                .debug_struct("Succeed")
+                .field("capabilities", capabilities)
+                .field("lud16", lud16)
+                .finish_non_exhaustive(),
+            Self::Fail(err) => f.debug_tuple("Fail").field(err).finish(),
+            Self::Delay { duration, then } => f
+                .debug_struct("Delay")
+                .field("duration", duration)
+                .field("then", then)
+                .finish(),
+            Self::NeverRespond => f.write_str("NeverRespond"),
+        }
+    }
 }
 
 /// Fake connector — Link scenarios drive this before a service exists.
@@ -77,7 +99,7 @@ async fn run(
             service,
             capabilities,
             lud16,
-        } => Ok((service as Arc<dyn WalletService>, capabilities, lud16)),
+        } => Ok((service, capabilities, lud16)),
         ConnectorScript::Fail(err) => Err(err),
         ConnectorScript::Delay { duration, then } => {
             tokio::time::sleep(duration).await;

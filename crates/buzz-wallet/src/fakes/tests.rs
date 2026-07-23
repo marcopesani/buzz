@@ -266,7 +266,7 @@ async fn fake_connector_succeeds_with_service_caps_and_lud16() {
     let caps = Capabilities::parse(["pay_invoice", "make_invoice"]);
     let connector = FakeWalletConnector::new();
     connector.script(ConnectorScript::Succeed {
-        service: Arc::clone(&service),
+        service: Arc::clone(&service) as Arc<dyn WalletService>,
         capabilities: caps.clone(),
         lud16: Some("alice@example.com".into()),
     });

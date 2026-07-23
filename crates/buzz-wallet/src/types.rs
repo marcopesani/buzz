@@ -1,5 +1,6 @@
 //! Shared wallet types — capabilities, invoice status, store records.
 
+use crate::error::WalletError;
 use buzz_core::payment::Amount;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -7,8 +8,9 @@ use std::str::FromStr;
 
 /// Opaque bolt11 invoice string.
 ///
-/// Decoding (amount, payment_hash, expiry) is a later unit — this newtype
-/// keeps the domain from treating the string as structured data.
+/// Decoding (amount, payment_hash, expiry) lives in the send use-case —
+/// this newtype keeps the rest of the domain from treating the string as
+/// structured data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Bolt11(String);
 
@@ -349,4 +351,86 @@ pub struct WalletHandle {
 pub struct Kind0Fields {
     /// Lightning Address to publish (or clear when `None` is intentional — drivers decide).
     pub lud16: Option<String>,
+}
+
+/// Where a send should go — lud16 or a raw bolt11.
+///
+/// Resolution (if needed) happens in [`prepare_send`](crate::Wallet::prepare_send).
+/// After that point the pay path only sees a validated bolt11.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendTarget {
+    /// Lightning Address (LUD-16); resolved via [`LnurlResolver`](crate::ports::LnurlResolver).
+    Lud16(String),
+    /// Already-minted bolt11 (pay card, pasted invoice).
+    Bolt11(Bolt11),
+}
+
+/// Bound confirmation for one prepared send.
+///
+/// Holds the exact bolt11 / payment_hash / amount that will be paid.
+/// Not [`Clone`]: [`cancel`](crate::Wallet::cancel) consumes the handle so
+/// confirm-after-cancel is unrepresentable. [`confirm`](crate::Wallet::confirm)
+/// takes `&ConfirmHandle` so a double-tap can hit the attempt latch.
+#[derive(Debug)]
+pub struct ConfirmHandle {
+    pub(crate) attempt_id: AttemptId,
+    pub(crate) bolt11: Bolt11,
+    pub(crate) payment_hash: String,
+    pub(crate) amount: Amount,
+    pub(crate) expires_at_unix: u64,
+}
+
+impl ConfirmHandle {
+    /// Attempt identity — also the [`PaymentStore`](crate::ports::PaymentStore) latch key.
+    pub fn attempt_id(&self) -> &AttemptId {
+        &self.attempt_id
+    }
+
+    /// Exact bolt11 that will be paid on confirm.
+    pub fn bolt11(&self) -> &Bolt11 {
+        &self.bolt11
+    }
+
+    /// Hex-encoded payment hash of the bound bolt11.
+    pub fn payment_hash(&self) -> &str {
+        &self.payment_hash
+    }
+
+    /// Amount bound at prepare time (msat).
+    pub fn amount(&self) -> Amount {
+        self.amount
+    }
+
+    /// Unix seconds when the bound invoice expires.
+    pub fn expires_at_unix(&self) -> u64 {
+        self.expires_at_unix
+    }
+}
+
+/// Outcome of [`confirm`](crate::Wallet::confirm).
+///
+/// Definitive wallet errors are carried in [`Failed`](Self::Failed) (not as
+/// `Err`) so the state machine transition is visible to callers. Transport /
+/// store failures still return `Err(WalletError)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendOutcome {
+    /// `pay_invoice` returned a preimage; store is [`PersistedPaymentState::Settled`].
+    Settled {
+        /// Hex-encoded payment preimage.
+        preimage: String,
+    },
+    /// Definitive failure; store is [`PersistedPaymentState::Failed`].
+    Failed {
+        /// The definitive wallet error (`InsufficientBalance`, `PaymentFailed`, …).
+        reason: WalletError,
+    },
+    /// Timeout / disconnect; store is [`PersistedPaymentState::Unknown`].
+    ///
+    /// Full reconcile semantics land in U5 — the record is already durable.
+    Unknown,
+    /// Second confirm on an already-latched attempt — `pay_invoice` was not called again.
+    AlreadyClaimed {
+        /// Current persisted state of the latched attempt.
+        state: PersistedPaymentState,
+    },
 }
