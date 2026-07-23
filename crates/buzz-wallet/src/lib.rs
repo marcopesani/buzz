@@ -9,6 +9,8 @@
 //! `confirm`, `cancel`, `reconcile`, `check_incoming`) so acceptance
 //! scenarios run network-free.
 
+/// Production NWC / LNURL adapters.
+pub mod adapters;
 mod bolt11;
 /// Shared [`WalletError`] for every port.
 pub mod error;
@@ -25,6 +27,10 @@ pub mod types;
 /// Use-cases: link, receive, send, reconcile, check_incoming.
 pub mod wallet;
 
+pub use adapters::{
+    map_nip47_error_code, parse_nwc_uri, HttpLnurlResolver, NwcWalletConnector, NwcWalletService,
+    ParsedNwcUri,
+};
 pub use error::WalletError;
 pub use ports::{
     Clock, LnurlResolver, PaymentStore, ProfilePublisher, SecretStore, WalletConnector,

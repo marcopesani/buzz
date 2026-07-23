@@ -359,7 +359,7 @@ pub enum ClaimOutcome {
 /// `lud16` is the connector-reported address from the NWC URI query param
 /// (when present). Persisted beside the secret so [`receive_mode`](crate::Wallet::receive_mode)
 /// needs no network after a restart.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct StoredSecret {
     /// Raw `nostr+walletconnect://…` URI (never logged).
     pub uri: String,
@@ -367,6 +367,16 @@ pub struct StoredSecret {
     pub capabilities: Capabilities,
     /// Lightning Address from the connection string, if any.
     pub lud16: Option<String>,
+}
+
+impl fmt::Debug for StoredSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredSecret")
+            .field("uri", &"<redacted>")
+            .field("capabilities", &self.capabilities)
+            .field("lud16", &self.lud16)
+            .finish()
+    }
 }
 
 /// How the Receive tab should present itself — decided from persisted state only.

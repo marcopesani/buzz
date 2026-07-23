@@ -1317,8 +1317,15 @@ dependencies = [
  "buzz-core",
  "hex",
  "lightning-invoice",
+ "nostr",
+ "nostr-relay-pool",
+ "nwc",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "url",
  "uuid",
 ]
 
@@ -5558,6 +5565,7 @@ version = "0.44.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d8f0fe13526800300a36bf3b7c5f752e62e32ab81c74a8e5caa2865708625a"
 dependencies = [
+ "aes",
  "base64",
  "bech32",
  "bip39",
@@ -5777,6 +5785,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "nwc"
+version = "0.44.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f651e3c28dd9da0873151233e804a92b6240a1db1260f3c9d727950adb8e9036"
+dependencies = [
+ "nostr",
+ "nostr-relay-pool",
+ "tracing",
 ]
 
 [[package]]
