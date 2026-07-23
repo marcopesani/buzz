@@ -104,6 +104,7 @@ pub async fn apply_workspace(
     nsec: Option<String>,
     repos_dir: Option<String>,
     agent_managed_profiles: Option<bool>,
+    community_id: Option<String>,
     app: AppHandle,
 ) -> Result<(), String> {
     let restore_app = app.clone();
@@ -233,6 +234,10 @@ pub async fn apply_workspace(
             }
         });
     }
+
+    // Wallet reconcile for the active community — non-blocking; failures must
+    // not fail workspace apply (same contract as agent restore).
+    crate::wallet::spawn_reconcile_after_apply(restore_app, community_id);
 
     Ok(())
 }

@@ -29,6 +29,7 @@ mod secret_store;
 mod shutdown;
 mod templates;
 mod util;
+mod wallet;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use builderlab::*;
 use commands::*;
@@ -356,6 +357,7 @@ pub fn run() {
         .manage(BuilderlabSession::default())
         .manage(BuilderlabLogin::default())
         .manage(commands::pairing::PairingHandle::new())
+        .manage(wallet::WalletManager::default())
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
@@ -372,6 +374,12 @@ pub fn run() {
                     .map(crate::migration::is_dev_data_dir_name)
                     .unwrap_or(false);
                 crate::managed_agents::init_nest_dir(is_dev_for_reset);
+                let wallet_manager = app_handle.state::<wallet::WalletManager>();
+                let wallet_data_dir = data_dir.clone();
+                let wallet_app = app_handle.clone();
+                tauri::async_runtime::block_on(async move {
+                    wallet_manager.init(wallet_data_dir, wallet_app).await;
+                });
                 crate::reset::run_boot_reset(&data_dir)
             } else {
                 crate::reset::ResetOutcome::default()
@@ -874,6 +882,14 @@ pub fn run() {
             validate_repos_dir,
             get_active_workspace,
             fetch_workspace_icon,
+            link_wallet,
+            unlink_wallet,
+            wallet_status,
+            wallet_receive,
+            wallet_prepare_send,
+            wallet_confirm,
+            wallet_cancel,
+            wallet_reconcile,
             set_prevent_sleep_active,
             get_agent_memory,
             relay_reconnect_hook,

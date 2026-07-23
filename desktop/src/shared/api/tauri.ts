@@ -1110,6 +1110,7 @@ export async function applyCommunity(
   token?: string,
   reposDir?: string,
   agentManagedProfiles?: boolean,
+  communityId?: string,
 ): Promise<void> {
   await invokeTauri("apply_workspace", {
     relayUrl,
@@ -1117,6 +1118,7 @@ export async function applyCommunity(
     token: token ?? null,
     reposDir: reposDir ?? null,
     agentManagedProfiles: agentManagedProfiles ?? false,
+    communityId: communityId ?? null,
   });
 }
 

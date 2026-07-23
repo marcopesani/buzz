@@ -664,6 +664,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
 
 [[package]]
+name = "base58ck"
+version = "0.1.101"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "365c0acd5b2e8dd0111a46c4faea83fb3cfb6e39a49a7c73a06e090db7b2eff0"
+dependencies = [
+ "bitcoin_hashes",
+]
+
+[[package]]
 name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -729,6 +738,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
+name = "bitcoin"
+version = "0.32.102"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb0ce8bd5baaa0d303a19915a6d93afed161f528654e42da2a7a97d05c59499a"
+dependencies = [
+ "base58ck",
+ "bech32",
+ "bitcoin-io",
+ "bitcoin-units",
+ "bitcoin_hashes",
+ "hex-conservative 0.2.2",
+ "hex_lit",
+ "secp256k1",
+]
+
+[[package]]
 name = "bitcoin-consensus-encoding"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -751,6 +776,15 @@ name = "bitcoin-io"
 version = "0.1.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb5de036369d1ac59d3c1819ebc4d850f89466f5401c571a285b6ed564a4cb78"
+dependencies = [
+ "bitcoin-consensus-encoding",
+]
+
+[[package]]
+name = "bitcoin-units"
+version = "0.1.101"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cb95693f371d089a4b5b6fc41c6f3ea6e01ee8c15388335dfac8ea685173b51"
 dependencies = [
  "bitcoin-consensus-encoding",
 ]
@@ -976,6 +1010,7 @@ version = "0.4.23"
 dependencies = [
  "anyhow",
  "arboard",
+ "async-trait",
  "atomic-write-file",
  "audioadapter-buffers",
  "axum",
@@ -984,6 +1019,7 @@ dependencies = [
  "buzz-core",
  "buzz-persona",
  "buzz-sdk",
+ "buzz-wallet",
  "bytes",
  "bzip2 0.6.1",
  "chrono",
@@ -1070,6 +1106,27 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "buzz-wallet"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bitcoin",
+ "buzz-core",
+ "hex",
+ "lightning-invoice",
+ "nostr",
+ "nostr-relay-pool",
+ "nwc",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
  "uuid",
 ]
 
@@ -2066,7 +2123,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -3436,6 +3493,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_lit"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3011d1213f159867b13cfd6ac92d2cd5f1345762c63be3554e84092d85a50bbd"
+
+[[package]]
 name = "hf-hub"
 version = "1.0.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4579,6 +4642,26 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "lightning-invoice"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d83bd798e04ab9eecc8bbef1fa17d3808859bcdc0406bd16c55d51c8834444"
+dependencies = [
+ "bech32",
+ "bitcoin",
+ "lightning-types",
+]
+
+[[package]]
+name = "lightning-types"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c211dfcff95ca308247da8b1e0e81604bc9e568239967cd2c34572558511e869"
+dependencies = [
+ "bitcoin",
 ]
 
 [[package]]
@@ -5767,6 +5850,7 @@ version = "0.44.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98cf5d15d70d1f8f4059e5f79923ac15891eb691d2843d01191e0585fb064d70"
 dependencies = [
+ "aes 0.8.4",
  "base64 0.22.1",
  "bech32",
  "bip39",
@@ -5989,6 +6073,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "nwc"
+version = "0.44.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f651e3c28dd9da0873151233e804a92b6240a1db1260f3c9d727950adb8e9036"
+dependencies = [
+ "nostr",
+ "nostr-relay-pool",
+ "tracing",
 ]
 
 [[package]]
@@ -8293,6 +8388,7 @@ version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9465315bc9d4566e1724f0fffcbcc446268cb522e60f9a27bcded6b19c108113"
 dependencies = [
+ "bitcoin_hashes",
  "rand 0.8.6",
  "secp256k1-sys",
  "serde",
@@ -9903,7 +9999,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

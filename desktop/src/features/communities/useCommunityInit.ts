@@ -22,6 +22,7 @@ import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
+import { resetWalletState } from "@/features/wallet/walletState";
 
 import { initFirstCommunity } from "./communityStorage";
 import type { Community } from "./types";
@@ -46,6 +47,7 @@ function resetCommunityState(): void {
   resetRenderScopedReactionHydration();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
+  resetWalletState();
 }
 
 type CommunityInitResult =
@@ -165,6 +167,7 @@ export function useCommunityInit(
           activeCommunity.token,
           activeCommunity.reposDir,
           getOverrides().agentManagedProfiles === true,
+          activeCommunity.id,
         );
       } catch (error) {
         // A bad `repos_dir` no longer reaches here — `apply_workspace` treats
