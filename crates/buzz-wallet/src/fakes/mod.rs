@@ -15,7 +15,7 @@ pub use clock::FakeClock;
 pub use connector::{ConnectorScript, FakeWalletConnector};
 pub use lnurl::{FakeLnurlResolver, LnurlScript};
 pub use payment_store::InMemoryPaymentStore;
-pub use profile::RecordingProfilePublisher;
+pub use profile::{RecordingProfilePublisher, SeededKind0};
 pub use secret_store::InMemorySecretStore;
 pub use wallet::{FakeWalletService, InvoiceScript, MakeInvoiceScript, PayScript, WalletCall};
 

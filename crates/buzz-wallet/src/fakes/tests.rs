@@ -213,6 +213,7 @@ async fn in_memory_secret_store_unchanged_assertion_works() {
     let secret = StoredSecret {
         uri: "nostr+walletconnect://example".into(),
         capabilities: Capabilities::parse(["pay_invoice"]),
+        lud16: None,
     };
     store.store(&secret).await.unwrap();
 

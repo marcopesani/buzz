@@ -304,12 +304,41 @@ pub enum ClaimOutcome {
 }
 
 /// NWC URI + capabilities persisted together in secure storage.
+///
+/// `lud16` is the connector-reported address from the NWC URI query param
+/// (when present). Persisted beside the secret so [`receive_mode`](crate::Wallet::receive_mode)
+/// needs no network after a restart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredSecret {
     /// Raw `nostr+walletconnect://…` URI (never logged).
     pub uri: String,
     /// Capabilities captured at link (or last refresh).
     pub capabilities: Capabilities,
+    /// Lightning Address from the connection string, if any.
+    pub lud16: Option<String>,
+}
+
+/// How the Receive tab should present itself — decided from persisted state only.
+///
+/// Chosen in one place ([`Wallet::receive_mode`](crate::Wallet::receive_mode));
+/// callers never re-branch on capabilities or address presence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiveMode {
+    /// Show a static Lightning Address (+ QR). `make_invoice` is never called.
+    StaticAddress(String),
+    /// No address; wallet can `make_invoice` — interactive one-shot receive.
+    Interactive,
+    /// Neither an address nor `make_invoice`. Wallet stays linked.
+    Unavailable,
+}
+
+/// Result of a successful [`link`](crate::Wallet::link).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletHandle {
+    /// Capabilities captured at link (`13194 ∩ get_info.methods`).
+    pub capabilities: Capabilities,
+    /// Lightning Address from the connection string, if any.
+    pub lud16: Option<String>,
 }
 
 /// Kind:0 fields a [`ProfilePublisher`](crate::ports::ProfilePublisher) may merge.

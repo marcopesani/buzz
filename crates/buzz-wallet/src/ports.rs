@@ -132,8 +132,14 @@ pub trait SecretStore: Send + Sync {
 }
 
 /// Merge-publishes kind:0 fields (drivers own the Buzz relay transport).
+///
+/// The use-case owns the skip rule ("do not overwrite a different lud16");
+/// this port exposes a minimal read so that rule is testable without network.
 #[async_trait]
 pub trait ProfilePublisher: Send + Sync {
+    /// Current `lud16` on the user's kind:0, if any.
+    async fn current_lud16(&self) -> Result<Option<String>, WalletError>;
+
     /// Merge `fields` into the latest kind:0, preserving every other field.
     async fn merge_publish(&self, fields: Kind0Fields) -> Result<(), WalletError>;
 }

@@ -1,14 +1,12 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-//! `buzz-wallet` — Lightning wallet ports, fakes, and (later) use-cases.
+//! `buzz-wallet` — Lightning wallet ports, use-cases, and fakes.
 //!
 //! Dependencies point inward: entities live in `buzz-core`; this crate owns
 //! the injectable ports (`WalletService`, `LnurlResolver`, `WalletConnector`,
-//! `PaymentStore`, `SecretStore`, `ProfilePublisher`) and scriptable fakes
-//! so acceptance scenarios run network-free.
-//!
-//! Unit U2 ships ports + error enum + fakes only — no use-cases, no real
-//! adapters, no bolt11 decoding.
+//! `PaymentStore`, `SecretStore`, `ProfilePublisher`), scriptable fakes, and
+//! use-cases (`link`, `receive_mode`, `receive`) so acceptance scenarios run
+//! network-free.
 
 /// Shared [`WalletError`] for every port.
 pub mod error;
@@ -18,6 +16,8 @@ pub mod fakes;
 pub mod ports;
 /// Capabilities, invoice status, store records, opaque bolt11.
 pub mod types;
+/// Use-cases: link, receive_mode, receive (U4/U5 extend send/reconcile).
+pub mod wallet;
 
 pub use error::WalletError;
 pub use ports::{
@@ -26,5 +26,6 @@ pub use ports::{
 };
 pub use types::{
     AttemptId, Bolt11, Capabilities, ClaimOutcome, InvoiceStatus, Kind0Fields, PaymentRecord,
-    PersistedPaymentState, ResolvedPay, StoredSecret, Tx, WalletMethod,
+    PersistedPaymentState, ReceiveMode, ResolvedPay, StoredSecret, Tx, WalletHandle, WalletMethod,
 };
+pub use wallet::Wallet;
