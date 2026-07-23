@@ -28,6 +28,8 @@ pub mod network;
 pub mod observer;
 /// NIP-AB device pairing — crypto primitives, message types, and errors.
 pub mod pairing;
+/// Pure Lightning payment domain — amount, verify, request/receipt validation.
+pub mod payment;
 /// Presence status types shared across crates.
 pub mod presence;
 /// Canonical relay runtime identities.

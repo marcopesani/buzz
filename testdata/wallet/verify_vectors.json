@@ -1,0 +1,62 @@
+[
+  {
+    "name": "known_good_sha256",
+    "preimage": "0101010101010101010101010101010101010101010101010101010101010101",
+    "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+    "valid": true
+  },
+  {
+    "name": "wrong_hash",
+    "preimage": "0101010101010101010101010101010101010101010101010101010101010101",
+    "payment_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "valid": false
+  },
+  {
+    "name": "empty_preimage",
+    "preimage": "",
+    "payment_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "valid": false
+  },
+  {
+    "name": "odd_length_hex",
+    "preimage": "010101010101010101010101010101010101010101010101010101010101010",
+    "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+    "valid": false
+  },
+  {
+    "name": "non_hex_chars",
+    "preimage": "zz01010101010101010101010101010101010101010101010101010101010101",
+    "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+    "valid": false
+  },
+  {
+    "name": "uppercase_hex_accepted",
+    "preimage": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+    "payment_hash": "9a2db2e23f1504cd056606553ac049c5e718e8f9ce9233876df1a7a1821af885",
+    "valid": true
+  },
+  {
+    "name": "preimage_16_bytes",
+    "preimage": "01010101010101010101010101010101",
+    "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793",
+    "valid": false
+  },
+  {
+    "name": "hash_31_bytes",
+    "preimage": "0101010101010101010101010101010101010101010101010101010101010101",
+    "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f0153637",
+    "valid": false
+  },
+  {
+    "name": "hash_33_bytes",
+    "preimage": "0101010101010101010101010101010101010101010101010101010101010101",
+    "payment_hash": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f01536379300",
+    "valid": false
+  },
+  {
+    "name": "hash_of_empty_input",
+    "preimage": "",
+    "payment_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "valid": false
+  }
+]
