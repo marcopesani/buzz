@@ -51,6 +51,7 @@ impl PaymentStore for InMemoryPaymentStore {
         payment_hash: &str,
         bolt11: &Bolt11,
         amount: Amount,
+        expires_at_unix: u64,
     ) -> Result<ClaimOutcome, WalletError> {
         let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
         let key = attempt_id.as_str().to_string();
@@ -62,6 +63,7 @@ impl PaymentStore for InMemoryPaymentStore {
             payment_hash: payment_hash.to_string(),
             bolt11: bolt11.clone(),
             amount,
+            expires_at_unix,
             state: PersistedPaymentState::Paying,
         };
         records.insert(key, record.clone());

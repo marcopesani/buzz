@@ -130,14 +130,20 @@ async fn claim_paying_two_concurrent_claims_same_attempt_admits_exactly_one() {
     let s1 = Arc::clone(&store);
     let a1 = attempt.clone();
     let b1 = bolt11.clone();
-    let t1 =
-        tokio::spawn(async move { s1.claim_paying(&a1, "hash-a", &b1, amount).await.unwrap() });
+    let t1 = tokio::spawn(async move {
+        s1.claim_paying(&a1, "hash-a", &b1, amount, 1_700_003_600)
+            .await
+            .unwrap()
+    });
 
     let s2 = Arc::clone(&store);
     let a2 = attempt.clone();
     let b2 = bolt11.clone();
-    let t2 =
-        tokio::spawn(async move { s2.claim_paying(&a2, "hash-a", &b2, amount).await.unwrap() });
+    let t2 = tokio::spawn(async move {
+        s2.claim_paying(&a2, "hash-a", &b2, amount, 1_700_003_600)
+            .await
+            .unwrap()
+    });
 
     let (r1, r2) = tokio::join!(t1, t2);
     let outcomes = [r1.unwrap(), r2.unwrap()];
@@ -165,6 +171,7 @@ async fn second_attempt_id_claims_independently() {
             "hash-1",
             &Bolt11::new("lnbc1one"),
             amount,
+            1_700_003_600,
         )
         .await
         .unwrap();
@@ -176,6 +183,7 @@ async fn second_attempt_id_claims_independently() {
             "hash-2",
             &Bolt11::new("lnbc1two"),
             amount,
+            1_700_003_600,
         )
         .await
         .unwrap();
@@ -189,6 +197,7 @@ async fn second_attempt_id_claims_independently() {
             "hash-other",
             &Bolt11::new("lnbc1other"),
             amount,
+            1_700_003_600,
         )
         .await
         .unwrap();
@@ -401,7 +410,13 @@ async fn payment_store_update_and_list_by_states() {
     let store = InMemoryPaymentStore::new("c1");
     let id = AttemptId::new("a1");
     store
-        .claim_paying(&id, "h1", &Bolt11::new("lnbc1"), Amount::from_msat(10))
+        .claim_paying(
+            &id,
+            "h1",
+            &Bolt11::new("lnbc1"),
+            Amount::from_msat(10),
+            1_700_003_600,
+        )
         .await
         .unwrap();
     store

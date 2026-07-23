@@ -1,21 +1,19 @@
-//! Wallet use-cases: link, receive_mode, receive, prepare_send, confirm, cancel.
+//! Wallet use-cases: link, receive, send, reconcile, check_incoming.
 
-use crate::bolt11::validate_payable_bolt11;
+use crate::bolt11::{payment_hash_hex, validate_payable_bolt11};
 use crate::error::WalletError;
 use crate::ports::{
     Clock, LnurlResolver, PaymentStore, ProfilePublisher, SecretStore, WalletConnector,
     WalletService,
 };
 use crate::types::{
-    AttemptId, Bolt11, Capabilities, ClaimOutcome, ConfirmHandle, Kind0Fields,
-    PersistedPaymentState, ReceiveMode, SendOutcome, SendTarget, StoredSecret, WalletHandle,
-    WalletMethod,
+    AttemptKey, Bolt11, Capabilities, ClaimOutcome, ConfirmHandle, IncomingStatus, InvoiceStatus,
+    Kind0Fields, PersistedPaymentState, ReceiveMode, SendOutcome, SendTarget, StoredSecret,
+    WalletHandle, WalletMethod, WalletTimeouts,
 };
-use buzz_core::payment::Amount;
+use buzz_core::payment::{Amount, PaymentRequest, PaymentTarget};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 /// Injected-port facade for wallet use-cases.
 ///
@@ -28,15 +26,15 @@ pub struct Wallet {
     resolver: Arc<dyn LnurlResolver>,
     store: Arc<dyn PaymentStore>,
     clock: Arc<dyn Clock>,
-    connect_timeout: Duration,
+    timeouts: WalletTimeouts,
     service: Mutex<Option<Arc<dyn WalletService>>>,
 }
 
 impl Wallet {
-    /// Build a wallet facade with injectable ports and connect timeout.
+    /// Build a wallet facade with injectable ports and timeouts.
     ///
-    /// Tests pass a short timeout and use `tokio::time::pause` so the
-    /// unreachable-relay scenario advances without sleeping wall time.
+    /// Tests pass short timeouts and use `tokio::time::pause` so unreachable
+    /// / never-respond scenarios advance without sleeping wall time.
     pub fn new(
         connector: Arc<dyn WalletConnector>,
         secrets: Arc<dyn SecretStore>,
@@ -44,7 +42,7 @@ impl Wallet {
         resolver: Arc<dyn LnurlResolver>,
         store: Arc<dyn PaymentStore>,
         clock: Arc<dyn Clock>,
-        connect_timeout: Duration,
+        timeouts: WalletTimeouts,
     ) -> Self {
         Self {
             connector,
@@ -53,7 +51,7 @@ impl Wallet {
             resolver,
             store,
             clock,
-            connect_timeout,
+            timeouts,
             service: Mutex::new(None),
         }
     }
@@ -118,8 +116,12 @@ impl Wallet {
     ///
     /// Lud16 is resolved to a bolt11 first; every path then shares one
     /// decode/validate step. Nothing is persisted and nothing is paid.
+    ///
+    /// `attempt` is the latch identity: [`AttemptKey::PayRequest`] shares one
+    /// id across taps on the same card; [`AttemptKey::Standalone`] is unique.
     pub async fn prepare_send(
         &self,
+        attempt: AttemptKey,
         target: SendTarget,
         amount: Amount,
         memo: Option<&str>,
@@ -127,7 +129,7 @@ impl Wallet {
         let bolt11 = self.resolve_to_bolt11(target, amount, memo).await?;
         let validated = validate_payable_bolt11(&bolt11, amount, self.clock.as_ref())?;
         Ok(ConfirmHandle {
-            attempt_id: AttemptId::new(Uuid::new_v4().to_string()),
+            attempt_id: attempt.to_attempt_id(),
             bolt11: validated.bolt11,
             payment_hash: validated.payment_hash_hex,
             amount: validated.amount,
@@ -138,7 +140,9 @@ impl Wallet {
     /// Persist-then-pay the bound invoice exactly once per attempt.
     ///
     /// `claim_paying` latches the attempt before `pay_invoice`. A second
-    /// confirm on the same handle is a no-op at the wallet (`AlreadyClaimed`).
+    /// confirm on the same attempt is a no-op at the wallet (`AlreadyClaimed`).
+    /// A pay-response timeout persists [`PersistedPaymentState::Unknown`] —
+    /// never Failed — and never re-fires `pay_invoice`.
     pub async fn confirm(&self, handle: &ConfirmHandle) -> Result<SendOutcome, WalletError> {
         if self.clock.now_unix() >= handle.expires_at_unix {
             return Err(WalletError::ResolveRejected);
@@ -151,6 +155,7 @@ impl Wallet {
                 &handle.payment_hash,
                 &handle.bolt11,
                 handle.amount,
+                handle.expires_at_unix,
             )
             .await?;
 
@@ -164,29 +169,31 @@ impl Wallet {
         }
 
         let service = self.live_service()?;
-        match service.pay_invoice(&handle.bolt11).await {
-            Ok(preimage) => {
+        match timeout(
+            self.timeouts.pay_response,
+            service.pay_invoice(&handle.bolt11),
+        )
+        .await
+        {
+            Ok(Ok(preimage)) => {
                 self.store
                     .update_state(&handle.attempt_id, PersistedPaymentState::Settled)
                     .await?;
                 Ok(SendOutcome::Settled { preimage })
             }
-            Err(err) if is_definitive_pay_error(&err) => {
+            Ok(Err(err)) if is_definitive_pay_error(&err) => {
                 self.store
                     .update_state(&handle.attempt_id, PersistedPaymentState::Failed)
                     .await?;
                 Ok(SendOutcome::Failed { reason: err })
             }
-            Err(WalletError::Unknown) => {
+            Ok(Err(WalletError::Unknown)) | Err(_) => {
                 self.store
                     .update_state(&handle.attempt_id, PersistedPaymentState::Unknown)
                     .await?;
                 Ok(SendOutcome::Unknown)
             }
-            Err(err) => {
-                // Unexpected transport error after claim — leave Paying for U5 reconcile.
-                Err(err)
-            }
+            Ok(Err(err)) => Err(err),
         }
     }
 
@@ -194,6 +201,54 @@ impl Wallet {
     /// cannot be expressed. Nothing was persisted; nothing is paid.
     pub fn cancel(&self, handle: ConfirmHandle) {
         drop(handle);
+    }
+
+    /// Drain every `Paying` / `Unknown` record via `lookup_invoice`.
+    ///
+    /// The only exit from Unknown. Never calls `pay_invoice`.
+    pub async fn reconcile(&self) -> Result<(), WalletError> {
+        let pending = self
+            .store
+            .list_by_states(&[
+                PersistedPaymentState::Paying,
+                PersistedPaymentState::Unknown,
+            ])
+            .await?;
+        let service = self.live_service()?;
+        let now = self.clock.now_unix();
+        for record in pending {
+            let status = service.lookup_invoice(&record.payment_hash).await?;
+            let next = reconcile_next_state(status, now, record.expires_at_unix);
+            if next != record.state {
+                self.store.update_state(&record.attempt_id, next).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Confirm an incoming payment against **this** wallet only.
+    ///
+    /// Takes a [`PaymentRequest`] — no receipt parameter exists, so a forged
+    /// receipt cannot influence the answer by construction.
+    pub async fn check_incoming(
+        &self,
+        request: &PaymentRequest,
+    ) -> Result<IncomingStatus, WalletError> {
+        let bolt11 = match &request.target {
+            PaymentTarget::Bolt11(b) | PaymentTarget::Both { bolt11: b, .. } => {
+                Bolt11::new(b.clone())
+            }
+            PaymentTarget::Lud16(_) => return Ok(IncomingStatus::Unconfirmable),
+        };
+        let hash = payment_hash_hex(&bolt11)?;
+        let service = self.live_service()?;
+        match service.lookup_invoice(&hash).await? {
+            InvoiceStatus::Settled => Ok(IncomingStatus::Paid),
+            InvoiceStatus::Pending
+            | InvoiceStatus::Failed
+            | InvoiceStatus::Expired
+            | InvoiceStatus::NotFound => Ok(IncomingStatus::Unpaid),
+        }
     }
 
     async fn resolve_to_bolt11(
@@ -223,9 +278,9 @@ impl Wallet {
         &self,
         uri: &str,
     ) -> Result<(Arc<dyn WalletService>, Capabilities, Option<String>), WalletError> {
-        match timeout(self.connect_timeout, self.connector.connect(uri)).await {
+        match timeout(self.timeouts.connect, self.connector.connect(uri)).await {
             Ok(result) => result,
-            Err(_elapsed) => Err(WalletError::Unreachable),
+            Err(_) => Err(WalletError::Unreachable),
         }
     }
 
@@ -260,6 +315,24 @@ fn is_definitive_pay_error(err: &WalletError) -> bool {
         err,
         WalletError::PaymentFailed | WalletError::InsufficientBalance | WalletError::QuotaExceeded
     )
+}
+
+/// One match: `lookup_invoice` status → next persisted state.
+///
+/// Pending / NotFound-before-expiry land on Unknown (re-poll). NotFound past
+/// invoice expiry is Failed — early fail invites a double pay on retry.
+fn reconcile_next_state(
+    status: InvoiceStatus,
+    now_unix: u64,
+    expires_at_unix: u64,
+) -> PersistedPaymentState {
+    match status {
+        InvoiceStatus::Settled => PersistedPaymentState::Settled,
+        InvoiceStatus::Failed | InvoiceStatus::Expired => PersistedPaymentState::Failed,
+        InvoiceStatus::Pending => PersistedPaymentState::Unknown,
+        InvoiceStatus::NotFound if now_unix >= expires_at_unix => PersistedPaymentState::Failed,
+        InvoiceStatus::NotFound => PersistedPaymentState::Unknown,
+    }
 }
 
 #[cfg(test)]

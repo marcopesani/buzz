@@ -5,9 +5,9 @@
 //! Dependencies point inward: entities live in `buzz-core`; this crate owns
 //! the injectable ports (`WalletService`, `LnurlResolver`, `WalletConnector`,
 //! `PaymentStore`, `SecretStore`, `ProfilePublisher`), scriptable fakes,
-//! bolt11 validation, and use-cases (`link`, `receive_mode`, `receive`,
-//! `prepare_send`, `confirm`, `cancel`) so acceptance scenarios run
-//! network-free.
+//! bolt11 validation, and use-cases (`link`, `receive`, `prepare_send`,
+//! `confirm`, `cancel`, `reconcile`, `check_incoming`) so acceptance
+//! scenarios run network-free.
 
 mod bolt11;
 /// Shared [`WalletError`] for every port.
@@ -22,7 +22,7 @@ pub mod system_clock;
 pub mod test_support;
 /// Capabilities, invoice status, store records, opaque bolt11.
 pub mod types;
-/// Use-cases: link, receive_mode, receive, prepare_send, confirm, cancel.
+/// Use-cases: link, receive, send, reconcile, check_incoming.
 pub mod wallet;
 
 pub use error::WalletError;
@@ -32,8 +32,8 @@ pub use ports::{
 };
 pub use system_clock::SystemClock;
 pub use types::{
-    AttemptId, Bolt11, Capabilities, ClaimOutcome, ConfirmHandle, InvoiceStatus, Kind0Fields,
-    PaymentRecord, PersistedPaymentState, ReceiveMode, ResolvedPay, SendOutcome, SendTarget,
-    StoredSecret, Tx, WalletHandle, WalletMethod,
+    AttemptId, AttemptKey, Bolt11, Capabilities, ClaimOutcome, ConfirmHandle, IncomingStatus,
+    InvoiceStatus, Kind0Fields, PaymentRecord, PersistedPaymentState, ReceiveMode, ResolvedPay,
+    SendOutcome, SendTarget, StoredSecret, Tx, WalletHandle, WalletMethod, WalletTimeouts,
 };
 pub use wallet::Wallet;

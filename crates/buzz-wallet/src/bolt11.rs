@@ -55,3 +55,13 @@ pub(crate) fn validate_payable_bolt11(
         expires_at_unix: expires_at,
     })
 }
+
+/// Extract the payment hash from an opaque bolt11 (no amount / expiry checks).
+///
+/// Used by [`check_incoming`](crate::Wallet::check_incoming) — the payee only
+/// needs the hash to query its own wallet.
+pub(crate) fn payment_hash_hex(bolt11: &Bolt11) -> Result<String, WalletError> {
+    let invoice =
+        Bolt11Invoice::from_str(bolt11.as_str()).map_err(|_| WalletError::ResolveRejected)?;
+    Ok(hex::encode(invoice.payment_hash().to_byte_array()))
+}

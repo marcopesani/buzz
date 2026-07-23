@@ -1,20 +1,21 @@
-//! Link + Receive + Send acceptance scenarios — named after the Gherkin contract.
+//! Link + Receive + Send + Lifecycle + Trust acceptance scenarios.
 
 use crate::error::WalletError;
 use crate::fakes::{
     ConnectorScript, FakeClock, FakeLnurlResolver, FakeWalletConnector, FakeWalletService,
-    InMemoryPaymentStore, InMemorySecretStore, LnurlScript, MakeInvoiceScript, PayScript,
-    RecordingProfilePublisher, SeededKind0, WalletCall,
+    InMemoryPaymentStore, InMemorySecretStore, InvoiceScript, LnurlScript, MakeInvoiceScript,
+    PayScript, RecordingProfilePublisher, SeededKind0, WalletCall,
 };
 use crate::ports::{PaymentStore, SecretStore, WalletService};
 use crate::test_support::{mint_bolt11, mint_bolt11_for_amount, MintInvoiceParams};
 use crate::types::{
-    Bolt11, Capabilities, Kind0Fields, PersistedPaymentState, ReceiveMode, ResolvedPay,
-    SendOutcome, SendTarget, StoredSecret, WalletMethod,
+    AttemptId, AttemptKey, Bolt11, Capabilities, IncomingStatus, InvoiceStatus, Kind0Fields,
+    PersistedPaymentState, ReceiveMode, ResolvedPay, SendOutcome, SendTarget, StoredSecret,
+    WalletMethod, WalletTimeouts,
 };
 use crate::wallet::Wallet;
 use async_trait::async_trait;
-use buzz_core::payment::{verify, Amount};
+use buzz_core::payment::{verify, Amount, PaymentReceipt, PaymentRequest, PaymentTarget};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +23,19 @@ const COMMUNITY: &str = "community-a";
 const VALID_URI: &str = "nostr+walletconnect://pubkey?relay=wss://relay.example&secret=abc";
 const CLOCK_NOW: u64 = 1_700_000_000;
 const BOB: &str = "bob@example.com";
+fn default_timeouts() -> WalletTimeouts {
+    WalletTimeouts {
+        connect: Duration::from_secs(5),
+        pay_response: Duration::from_secs(30),
+    }
+}
+
+fn short_pay_timeouts() -> WalletTimeouts {
+    WalletTimeouts {
+        connect: Duration::from_secs(5),
+        pay_response: Duration::from_secs(1),
+    }
+}
 
 fn full_capabilities() -> Capabilities {
     Capabilities::from_methods([
@@ -37,9 +51,14 @@ struct Harness {
     service: Arc<FakeWalletService>,
     resolver: Arc<FakeLnurlResolver>,
     store: Arc<InMemoryPaymentStore>,
+    clock: Arc<FakeClock>,
 }
 
 fn harness_linked() -> Harness {
+    harness_with_timeouts(default_timeouts())
+}
+
+fn harness_with_timeouts(timeouts: WalletTimeouts) -> Harness {
     let service = Arc::new(FakeWalletService::new());
     service.set_balance(Some(Amount::from_msat(100_000_000)));
     let connector = Arc::new(FakeWalletConnector::new());
@@ -60,13 +79,14 @@ fn harness_linked() -> Harness {
         Arc::clone(&resolver) as Arc<dyn crate::ports::LnurlResolver>,
         Arc::clone(&store) as Arc<dyn PaymentStore>,
         Arc::clone(&clock) as Arc<dyn crate::ports::Clock>,
-        Duration::from_secs(5),
+        timeouts,
     );
     Harness {
         wallet,
         service,
         resolver,
         store,
+        clock,
     }
 }
 
@@ -82,7 +102,29 @@ fn link_only_harness(
         Arc::new(FakeLnurlResolver::new()) as Arc<dyn crate::ports::LnurlResolver>,
         Arc::new(InMemoryPaymentStore::new(COMMUNITY)) as Arc<dyn PaymentStore>,
         Arc::new(FakeClock::new(CLOCK_NOW)) as Arc<dyn crate::ports::Clock>,
-        Duration::from_secs(5),
+        default_timeouts(),
+    )
+}
+
+fn wallet_over_store(
+    store: Arc<InMemoryPaymentStore>,
+    service: Arc<FakeWalletService>,
+    clock: Arc<FakeClock>,
+) -> Wallet {
+    let connector = Arc::new(FakeWalletConnector::new());
+    connector.script(ConnectorScript::Succeed {
+        service: Arc::clone(&service) as Arc<dyn WalletService>,
+        capabilities: full_capabilities(),
+        lud16: None,
+    });
+    Wallet::new(
+        connector as Arc<dyn crate::ports::WalletConnector>,
+        Arc::new(InMemorySecretStore::new(store.community_id())) as Arc<dyn SecretStore>,
+        Arc::new(RecordingProfilePublisher::new()) as Arc<dyn crate::ports::ProfilePublisher>,
+        Arc::new(FakeLnurlResolver::new()) as Arc<dyn crate::ports::LnurlResolver>,
+        Arc::clone(&store) as Arc<dyn PaymentStore>,
+        clock as Arc<dyn crate::ports::Clock>,
+        default_timeouts(),
     )
 }
 
@@ -399,7 +441,12 @@ async fn happy_path() {
 
     let handle = h
         .wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), amount, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
         .await
         .expect("prepare");
     assert_eq!(handle.payment_hash(), minted.payment_hash_hex);
@@ -433,7 +480,12 @@ async fn no_confirmation_no_spend() {
 
     let _handle = h
         .wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), amount, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
         .await
         .expect("prepare");
 
@@ -456,7 +508,12 @@ async fn resolver_amount_mismatch_is_rejected_before_confirmation() {
 
     let err = h
         .wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), requested, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            requested,
+            None,
+        )
         .await
         .expect_err("mismatch");
 
@@ -483,7 +540,12 @@ async fn an_amountless_invoice_is_rejected() {
 
     let err = h
         .wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), amount, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
         .await
         .expect_err("amountless");
 
@@ -505,7 +567,12 @@ async fn insufficient_balance_is_definitive() {
 
     let handle = h
         .wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), amount, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
         .await
         .expect("prepare");
     let outcome = h.wallet.confirm(&handle).await.expect("confirm");
@@ -553,7 +620,12 @@ async fn expired_invoice_rejected_at_prepare() {
 
     let err = h
         .wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), amount, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
         .await
         .expect_err("expired");
 
@@ -573,7 +645,12 @@ async fn confirm_after_cancel_is_impossible() {
 
     let handle = h
         .wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), amount, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
         .await
         .expect("prepare");
     h.wallet.cancel(handle);
@@ -582,9 +659,9 @@ async fn confirm_after_cancel_is_impossible() {
     assert!(h.store.all().is_empty());
 }
 
-/// Guard: double-confirm on the same handle fires one pay_invoice
+/// Scenario: A double confirmation fires one payment
 #[tokio::test]
-async fn double_confirm_on_same_handle_fires_one_pay_invoice() {
+async fn a_double_confirmation_fires_one_payment() {
     let h = harness_linked();
     h.wallet.link(VALID_URI).await.expect("link");
 
@@ -597,7 +674,12 @@ async fn double_confirm_on_same_handle_fires_one_pay_invoice() {
 
     let handle = h
         .wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), amount, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
         .await
         .expect("prepare");
 
@@ -647,12 +729,17 @@ async fn persist_before_pay_ordering() {
         resolver as Arc<dyn crate::ports::LnurlResolver>,
         Arc::clone(&store) as Arc<dyn PaymentStore>,
         clock as Arc<dyn crate::ports::Clock>,
-        Duration::from_secs(5),
+        default_timeouts(),
     );
     wallet.link(VALID_URI).await.expect("link");
 
     let handle = wallet
-        .prepare_send(SendTarget::Lud16(BOB.into()), amount, None)
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
         .await
         .expect("prepare");
     let outcome = wallet.confirm(&handle).await.expect("confirm");
@@ -720,4 +807,399 @@ impl WalletService for StoreCheckingWallet {
     async fn list_transactions(&self) -> Result<Vec<crate::types::Tx>, WalletError> {
         self.inner.list_transactions().await
     }
+}
+
+fn lookup_calls(service: &FakeWalletService) -> Vec<String> {
+    service
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            WalletCall::LookupInvoice { payment_hash } => Some(payment_hash),
+            _ => None,
+        })
+        .collect()
+}
+
+fn payment_request_bolt11(bolt11: &Bolt11, amount: Amount) -> PaymentRequest {
+    PaymentRequest {
+        amount,
+        memo: None,
+        target: PaymentTarget::Bolt11(bolt11.as_str().to_string()),
+        channel_id: "channel-c".into(),
+        payee_pubkey: "payee-pubkey".into(),
+        expiry: Some(CLOCK_NOW + 3_600),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Feature: Payment lifecycle
+// ---------------------------------------------------------------------------
+
+/// Scenario: A timeout is Unknown, not Failed
+#[tokio::test(start_paused = true)]
+async fn a_timeout_is_unknown_not_failed() {
+    let h = harness_with_timeouts(short_pay_timeouts());
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(25_000);
+    let minted = mint_bolt11_for_amount(25_000, 0xaa, CLOCK_NOW);
+    script_lud16(&h.resolver, &minted, amount);
+    h.service.script_pay(PayScript::NeverRespond);
+
+    let handle = h
+        .wallet
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
+        .await
+        .expect("prepare");
+    let outcome = h.wallet.confirm(&handle).await.expect("confirm");
+
+    assert_eq!(outcome, SendOutcome::Unknown);
+    assert_eq!(h.store.all()[0].state, PersistedPaymentState::Unknown);
+    assert_eq!(pay_invoice_calls(&h.service).len(), 1);
+}
+
+/// Scenario: Unknown reconciles to Settled
+#[tokio::test(start_paused = true)]
+async fn unknown_reconciles_to_settled() {
+    let h = harness_with_timeouts(short_pay_timeouts());
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(25_000);
+    let minted = mint_bolt11_for_amount(25_000, 0xab, CLOCK_NOW);
+    script_lud16(&h.resolver, &minted, amount);
+    h.service.script_pay(PayScript::NeverRespond);
+
+    let handle = h
+        .wallet
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
+        .await
+        .expect("prepare");
+    assert_eq!(
+        h.wallet.confirm(&handle).await.expect("confirm"),
+        SendOutcome::Unknown
+    );
+    let pay_count_before = pay_invoice_calls(&h.service).len();
+
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::Settled),
+    );
+    h.wallet.reconcile().await.expect("reconcile");
+
+    assert_eq!(h.store.all()[0].state, PersistedPaymentState::Settled);
+    assert_eq!(pay_invoice_calls(&h.service).len(), pay_count_before);
+    assert_eq!(lookup_calls(&h.service), vec![minted.payment_hash_hex]);
+}
+
+/// Scenario: Unknown reconciles to Failed
+#[tokio::test(start_paused = true)]
+async fn unknown_reconciles_to_failed() {
+    let h = harness_with_timeouts(short_pay_timeouts());
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(25_000);
+    let minted = mint_bolt11_for_amount(25_000, 0xac, CLOCK_NOW);
+    script_lud16(&h.resolver, &minted, amount);
+    h.service.script_pay(PayScript::NeverRespond);
+
+    let handle = h
+        .wallet
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
+        .await
+        .expect("prepare");
+    assert_eq!(
+        h.wallet.confirm(&handle).await.expect("confirm"),
+        SendOutcome::Unknown
+    );
+
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::Failed),
+    );
+    h.wallet.reconcile().await.expect("reconcile");
+
+    assert_eq!(h.store.all()[0].state, PersistedPaymentState::Failed);
+    assert_eq!(pay_invoice_calls(&h.service).len(), 1);
+}
+
+/// Scenario: A double-tap on a lud16 pay card fires one payment
+#[tokio::test]
+async fn a_double_tap_on_a_lud16_pay_card_fires_one_payment() {
+    let h = harness_linked();
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(25_000);
+    let first_mint = mint_bolt11_for_amount(25_000, 0xad, CLOCK_NOW);
+    let second_mint = mint_bolt11_for_amount(25_000, 0xae, CLOCK_NOW);
+    assert_ne!(first_mint.payment_hash_hex, second_mint.payment_hash_hex);
+    script_lud16(&h.resolver, &first_mint, amount);
+    script_lud16(&h.resolver, &second_mint, amount);
+    h.service.script_pay(PayScript::Settle {
+        preimage: first_mint.preimage_hex.clone(),
+    });
+
+    let card = AttemptKey::PayRequest {
+        event_id: "req-event-lud16-card".into(),
+    };
+    let handle_a = h
+        .wallet
+        .prepare_send(card.clone(), SendTarget::Lud16(BOB.into()), amount, None)
+        .await
+        .expect("prepare first tap");
+    let handle_b = h
+        .wallet
+        .prepare_send(card, SendTarget::Lud16(BOB.into()), amount, None)
+        .await
+        .expect("prepare second tap");
+
+    assert_eq!(handle_a.attempt_id(), handle_b.attempt_id());
+    assert_ne!(handle_a.payment_hash(), handle_b.payment_hash());
+
+    let first = h.wallet.confirm(&handle_a).await.expect("confirm a");
+    let second = h.wallet.confirm(&handle_b).await.expect("confirm b");
+
+    assert!(matches!(first, SendOutcome::Settled { .. }));
+    assert_eq!(
+        second,
+        SendOutcome::AlreadyClaimed {
+            state: PersistedPaymentState::Settled
+        }
+    );
+    assert_eq!(pay_invoice_calls(&h.service).len(), 1);
+    assert_eq!(h.store.all().len(), 1);
+    assert_eq!(
+        h.store
+            .list_by_states(&[PersistedPaymentState::Paying])
+            .await
+            .expect("list")
+            .len(),
+        0
+    );
+}
+
+/// Scenario: A lookup that finds no invoice stays Unknown until the invoice expires
+#[tokio::test(start_paused = true)]
+async fn a_lookup_that_finds_no_invoice_stays_unknown_until_the_invoice_expires() {
+    let h = harness_with_timeouts(short_pay_timeouts());
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(25_000);
+    let expiry_secs = 3_600u64;
+    let minted = mint_bolt11(MintInvoiceParams {
+        amount_msat: Some(25_000),
+        preimage: [0xaf; 32],
+        timestamp_unix: CLOCK_NOW,
+        expiry_secs,
+        description: None,
+    });
+    script_lud16(&h.resolver, &minted, amount);
+    h.service.script_pay(PayScript::NeverRespond);
+
+    let handle = h
+        .wallet
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Lud16(BOB.into()),
+            amount,
+            None,
+        )
+        .await
+        .expect("prepare");
+    assert_eq!(
+        h.wallet.confirm(&handle).await.expect("confirm"),
+        SendOutcome::Unknown
+    );
+    let expires_at = handle.expires_at_unix();
+
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::NotFound),
+    );
+    h.wallet.reconcile().await.expect("reconcile before expiry");
+    assert_eq!(h.store.all()[0].state, PersistedPaymentState::Unknown);
+
+    h.clock.set(expires_at);
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::NotFound),
+    );
+    h.wallet.reconcile().await.expect("reconcile after expiry");
+    assert_eq!(h.store.all()[0].state, PersistedPaymentState::Failed);
+    assert_eq!(pay_invoice_calls(&h.service).len(), 1);
+}
+
+/// Scenario: Reconciliation survives a restart
+#[tokio::test]
+async fn reconciliation_survives_a_restart() {
+    let store = Arc::new(InMemoryPaymentStore::new(COMMUNITY));
+    let service = Arc::new(FakeWalletService::new());
+    let clock = Arc::new(FakeClock::new(CLOCK_NOW));
+    let amount = Amount::from_msat(25_000);
+    let minted = mint_bolt11_for_amount(25_000, 0xb0, CLOCK_NOW);
+
+    // Crash mid-pay: record already latched in Paying, no wallet response yet.
+    let claim = store
+        .claim_paying(
+            &AttemptId::new("standalone:restart-attempt"),
+            &minted.payment_hash_hex,
+            &minted.bolt11,
+            amount,
+            CLOCK_NOW + 3_600,
+        )
+        .await
+        .expect("claim");
+    assert!(matches!(claim, crate::types::ClaimOutcome::Claimed(_)));
+    assert_eq!(store.all()[0].state, PersistedPaymentState::Paying);
+
+    // Restart: new Wallet over the same store.
+    let wallet = wallet_over_store(Arc::clone(&store), Arc::clone(&service), Arc::clone(&clock));
+    wallet.link(VALID_URI).await.expect("link after restart");
+    service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::Settled),
+    );
+    wallet.reconcile().await.expect("reconcile");
+
+    assert_eq!(store.all()[0].state, PersistedPaymentState::Settled);
+    assert!(
+        pay_invoice_calls(&service).is_empty(),
+        "restart reconcile must not call pay_invoice"
+    );
+}
+
+/// Scenario: A community switch does not orphan a pending payment
+#[tokio::test]
+async fn a_community_switch_does_not_orphan_a_pending_payment() {
+    let store_x = Arc::new(InMemoryPaymentStore::new("community-x"));
+    let service_x = Arc::new(FakeWalletService::new());
+    let clock = Arc::new(FakeClock::new(CLOCK_NOW));
+    let amount = Amount::from_msat(25_000);
+    let minted = mint_bolt11_for_amount(25_000, 0xb1, CLOCK_NOW);
+
+    store_x
+        .claim_paying(
+            &AttemptId::new("request:card-x"),
+            &minted.payment_hash_hex,
+            &minted.bolt11,
+            amount,
+            CLOCK_NOW + 3_600,
+        )
+        .await
+        .expect("claim");
+    store_x
+        .update_state(
+            &AttemptId::new("request:card-x"),
+            PersistedPaymentState::Unknown,
+        )
+        .await
+        .expect("mark unknown");
+
+    // Switch to community Y: different store / connection. X's record untouched.
+    let store_y = Arc::new(InMemoryPaymentStore::new("community-y"));
+    let service_y = Arc::new(FakeWalletService::new());
+    let wallet_y = wallet_over_store(Arc::clone(&store_y), service_y, Arc::clone(&clock));
+    wallet_y.link(VALID_URI).await.expect("link y");
+    assert!(store_y.all().is_empty());
+    assert_eq!(store_x.all().len(), 1);
+    assert_eq!(store_x.all()[0].state, PersistedPaymentState::Unknown);
+
+    // Switch back to X: fresh Wallet over X's store (reset drops connection only).
+    let wallet_x = wallet_over_store(Arc::clone(&store_x), Arc::clone(&service_x), clock);
+    wallet_x.link(VALID_URI).await.expect("link x again");
+    assert_eq!(store_x.all().len(), 1);
+    assert_eq!(store_x.all()[0].payment_hash, minted.payment_hash_hex);
+
+    service_x.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::Settled),
+    );
+    wallet_x.reconcile().await.expect("reconcile x");
+    assert_eq!(store_x.all()[0].state, PersistedPaymentState::Settled);
+    assert!(pay_invoice_calls(&service_x).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Feature: Trust is local
+// ---------------------------------------------------------------------------
+
+/// Scenario: A forged receipt does not convince the payee
+#[tokio::test]
+async fn a_forged_receipt_does_not_convince_the_payee() {
+    let h = harness_linked();
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(500_000);
+    let minted = mint_bolt11_for_amount(500_000, 0xb2, CLOCK_NOW);
+    let request = payment_request_bolt11(&minted.bolt11, amount);
+
+    // Channel noise: a forged receipt exists — but check_incoming cannot accept it.
+    let _forged_receipt = PaymentReceipt {
+        request_id: "req-event-b".into(),
+        payment_hash: minted.payment_hash_hex.clone(),
+        preimage: hex::encode([0xde; 32]),
+        amount,
+    };
+
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::NotFound),
+    );
+    let status = h.wallet.check_incoming(&request).await.expect("check");
+    assert_eq!(status, IncomingStatus::Unpaid);
+}
+
+/// Scenario: The payee confirms from its own wallet
+#[tokio::test]
+async fn the_payee_confirms_from_its_own_wallet() {
+    let h = harness_linked();
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(500_000);
+    let minted = mint_bolt11_for_amount(500_000, 0xb3, CLOCK_NOW);
+    let request = payment_request_bolt11(&minted.bolt11, amount);
+
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::Settled),
+    );
+    let status = h.wallet.check_incoming(&request).await.expect("check");
+    assert_eq!(status, IncomingStatus::Paid);
+}
+
+/// Scenario: A lud16-only request is not confirmable
+#[tokio::test]
+async fn a_lud16_only_request_is_not_confirmable() {
+    let h = harness_linked();
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let request = PaymentRequest {
+        amount: Amount::from_msat(500_000),
+        memo: None,
+        target: PaymentTarget::Lud16(BOB.into()),
+        channel_id: "channel-c".into(),
+        payee_pubkey: "payee-pubkey".into(),
+        expiry: Some(CLOCK_NOW + 3_600),
+    };
+
+    let status = h.wallet.check_incoming(&request).await.expect("check");
+    assert_eq!(status, IncomingStatus::Unconfirmable);
+    assert!(
+        lookup_calls(&h.service).is_empty(),
+        "lud16-only has no hash to look up"
+    );
 }

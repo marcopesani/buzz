@@ -91,12 +91,15 @@ pub trait PaymentStore: Send + Sync {
     ///
     /// A second claim for the same attempt returns
     /// [`ClaimOutcome::AlreadyClaimed`] — not a second record.
+    /// `expires_at_unix` is stored so reconcile can honour the
+    /// NotFound-until-expiry rule without re-decoding.
     async fn claim_paying(
         &self,
         attempt_id: &AttemptId,
         payment_hash: &str,
         bolt11: &Bolt11,
         amount: Amount,
+        expires_at_unix: u64,
     ) -> Result<ClaimOutcome, WalletError>;
 
     /// Load a record by attempt id.

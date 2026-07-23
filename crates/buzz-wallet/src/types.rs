@@ -5,6 +5,19 @@ use buzz_core::payment::Amount;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
+
+/// Timeouts for connect and pay-response RPCs.
+///
+/// Bundled so [`Wallet::new`](crate::Wallet::new) stays at one timeout arg —
+/// both are injected the same way (short values + `tokio::time::pause` in tests).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalletTimeouts {
+    /// Wallet relay connect / info-event timeout.
+    pub connect: Duration,
+    /// `pay_invoice` response timeout — elapsed → Unknown, never Failed.
+    pub pay_response: Duration,
+}
 
 /// Opaque bolt11 invoice string.
 ///
@@ -58,7 +71,8 @@ impl From<&str> for Bolt11 {
 /// Identity of one payment attempt (confirm-handle / request identity).
 ///
 /// Distinct from [`payment_hash`](PaymentRecord::payment_hash): a double-tap
-/// on a `lud16` card mints two invoices with two hashes, but two attempt ids.
+/// on a `lud16` card mints two invoices with two hashes that must still share
+/// one attempt id (see [`AttemptKey`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttemptId(String);
 
@@ -71,6 +85,36 @@ impl AttemptId {
     /// Borrow the id string.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Caller-supplied origin for [`prepare_send`](crate::Wallet::prepare_send).
+///
+/// The latch is keyed by attempt, not payment hash. Two taps on the same
+/// pay card share one [`AttemptKey::PayRequest`]; a standalone send cannot
+/// collide because its id is namespaced under a fresh UUID.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AttemptKey {
+    /// Fresh standalone send — each prepare mints a unique [`AttemptId`].
+    Standalone,
+    /// In-chat pay card keyed by the request event id.
+    ///
+    /// Two `prepare_send` calls with the same event id produce handles that
+    /// share one [`AttemptId`], so the second `confirm` hits AlreadyClaimed.
+    PayRequest {
+        /// Request event id (kind 40009).
+        event_id: String,
+    },
+}
+
+impl AttemptKey {
+    /// Resolve this key into the store latch id for one prepare.
+    pub(crate) fn to_attempt_id(&self) -> AttemptId {
+        match self {
+            // Prefixes keep standalone UUIDs from colliding with request ids.
+            Self::Standalone => AttemptId::new(format!("standalone:{}", uuid::Uuid::new_v4())),
+            Self::PayRequest { event_id } => AttemptId::new(format!("request:{event_id}")),
+        }
     }
 }
 
@@ -292,6 +336,11 @@ pub struct PaymentRecord {
     pub bolt11: Bolt11,
     /// Amount in millisatoshis.
     pub amount: Amount,
+    /// Unix seconds when the bound invoice expires.
+    ///
+    /// Required so reconcile can keep `NotFound` as Unknown until expiry
+    /// without re-decoding (and without trusting a live wallet index).
+    pub expires_at_unix: u64,
     /// Persisted lifecycle state.
     pub state: PersistedPaymentState,
 }
@@ -426,11 +475,26 @@ pub enum SendOutcome {
     },
     /// Timeout / disconnect; store is [`PersistedPaymentState::Unknown`].
     ///
-    /// Full reconcile semantics land in U5 — the record is already durable.
+    /// Exit only via [`reconcile`](crate::Wallet::reconcile) / `lookup_invoice`.
     Unknown,
     /// Second confirm on an already-latched attempt — `pay_invoice` was not called again.
     AlreadyClaimed {
         /// Current persisted state of the latched attempt.
         state: PersistedPaymentState,
     },
+}
+
+/// Outcome of [`check_incoming`](crate::Wallet::check_incoming).
+///
+/// Trust is local: settled only when **this** wallet's `lookup_invoice`
+/// reports Settled for a payee-minted bolt11. Receipts cannot influence
+/// the answer — the API takes no receipt parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IncomingStatus {
+    /// Own wallet reports the request's payment_hash as settled.
+    Paid,
+    /// Request carries a bolt11 whose hash is not settled in this wallet.
+    Unpaid,
+    /// `lud16`-only request — no hash the payee can look up.
+    Unconfirmable,
 }
