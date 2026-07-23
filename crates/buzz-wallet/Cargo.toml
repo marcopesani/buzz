@@ -1,0 +1,21 @@
+[package]
+name = "buzz-wallet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lightning wallet ports, use-cases, and fakes (NWC / LNURL)"
+
+[lib]
+name = "buzz_wallet"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1"
+buzz-core = { path = "../buzz-core" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "time", "sync"] }
