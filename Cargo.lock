@@ -934,11 +934,14 @@ dependencies = [
 name = "buzz-cli"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64",
+ "bitcoin",
  "buzz-core",
  "buzz-persona",
  "buzz-sdk",
+ "buzz-wallet",
  "buzz-ws-client",
  "bytes",
  "chrono",
@@ -947,6 +950,7 @@ dependencies = [
  "dirs",
  "hex",
  "infer",
+ "lightning-invoice",
  "nostr",
  "rand 0.10.1",
  "reqwest 0.13.4",

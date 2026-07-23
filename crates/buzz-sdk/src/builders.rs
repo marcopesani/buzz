@@ -543,6 +543,11 @@ pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder,
 /// Callers embedding a `bolt11` must pass an `expiry` already clamped to the
 /// decoded invoice expiry (`event expiry ≤ invoice expiry`). Bolt11 decoding
 /// is intentionally outside this crate.
+///
+/// `.allow_self_tagging()` is required: the CLI (and agents) set
+/// `payee_pubkey` to the signer's own key. nostr 0.44 strips matching `p`
+/// tags by default — without this, a self-payee request ships with no `p`
+/// and fails `PaymentRequest::from_tags` on the pay/check path.
 pub fn build_payment_request(
     channel_id: Uuid,
     amount_msat: u64,
@@ -583,13 +588,20 @@ pub fn build_payment_request(
     if let Some(ts) = expiry {
         tags.push(tag(&["expiry", &ts.to_string()])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(KIND_PAYMENT_REQUEST as u16), "").tags(tags))
+    Ok(
+        EventBuilder::new(Kind::Custom(KIND_PAYMENT_REQUEST as u16), "")
+            .tags(tags)
+            .allow_self_tagging(),
+    )
 }
 
 /// Build a decorative payment receipt (kind [`KIND_PAYMENT_RECEIPT`]).
 ///
 /// References the request with a **bare** `["e", "<request-id>"]` tag — never
 /// NIP-10 `root`/`reply` markers (marked e-tags would inflate thread counters).
+///
+/// No `.allow_self_tagging()`: receipts carry no `p` tag (payer is the author;
+/// payee is identified only via the referenced request).
 pub fn build_payment_receipt(
     channel_id: Uuid,
     request_event_id: nostr::EventId,
@@ -2499,6 +2511,34 @@ mod tests {
         assert!(has_tag(&ev, "lud16", "bob@example.com"));
         assert!(tag_values(&ev, "bolt11").is_empty());
         assert!(tag_values(&ev, "expiration").is_empty());
+    }
+
+    #[test]
+    fn payment_request_keeps_p_tag_when_payee_is_author() {
+        // Regression: nostr 0.44 strips self `p` tags unless allow_self_tagging.
+        let k = Keys::generate();
+        let payee = k.public_key().to_hex();
+        let channel = uuid();
+        let builder = build_payment_request(
+            channel,
+            21_000,
+            &payee,
+            Some("lnbc210n1selfpayee"),
+            None,
+            Some("self"),
+            Some(1_800_000_000),
+        )
+        .unwrap();
+        let ev = builder.sign_with_keys(&k).expect("sign self-payee request");
+        assert_eq!(ev.pubkey.to_hex(), payee);
+        assert!(
+            has_tag(&ev, "p", &payee),
+            "self-payee request must retain p tag; got tags: {:?}",
+            ev.tags
+                .iter()
+                .map(|t| t.as_slice().to_vec())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
