@@ -606,3 +606,35 @@ buzz channels delete --channel "$FORUM_ID" | jq .
 | 59 | `notes get` | ☐ | By name, by naddr, --content-only, cross-author, ambiguous → exit 1 |
 | 60 | `notes ls` | ☐ | Own, --author all, --tag, --limit |
 | 61 | `notes rm` | ☐ | Delete→get 404, double-delete idempotent, missing slug → NotFound |
+
+## Local NWC mock wallet (`buzz-mock-wallet`)
+
+Dev-only loopback NWC wallet for end-to-end Lightning testing. **Moves no real money.**
+
+```bash
+# From repo root (Hermit activated)
+cargo run -p buzz-mock-wallet -- \
+  --balance-msat 1000000 \
+  --port 0
+  # optional: --receive-only
+  # optional: --fail-next-pay PAYMENT_FAILED
+  # optional: --response-delay-ms 250
+  # optional: --swallow-requests
+```
+
+On startup the process prints a ready-to-paste NWC URI on stdout, for example:
+
+```text
+nostr+walletconnect://<wallet_pubkey>?relay=ws%3A%2F%2F127.0.0.1%3A<port>&secret=<client_secret_hex>
+```
+
+Paste that URI into `buzz wallet link`, desktop link-wallet, or any NIP-47 client. The daemon speaks NIP-04 encrypted kinds `23194`/`23195`/`23196` (matching rust-nostr `nwc` 0.44), mints real bolt11 invoices, and keeps an in-memory msat ledger.
+
+| Flag | Meaning |
+|------|--------|
+| `--balance-msat` | Starting ledger balance (msat) |
+| `--port` | Loopback bind port (`0` = ephemeral) |
+| `--receive-only` | Omit pay methods from 13194 / `get_info`; pay → `RESTRICTED` |
+| `--fail-next-pay <CODE>` | Next `pay_invoice` returns that NIP-47 error code |
+| `--response-delay-ms` | Fixed delay before every RPC response |
+| `--swallow-requests` | Accept requests but never send 23195 (client-timeout tests) |

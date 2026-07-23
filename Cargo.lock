@@ -1069,6 +1069,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "buzz-mock-wallet"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "buzz-core",
+ "buzz-wallet",
+ "clap",
+ "futures-util",
+ "hex",
+ "lightning-invoice",
+ "nostr",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "buzz-pair-relay"
 version = "0.1.0"
 dependencies = [
