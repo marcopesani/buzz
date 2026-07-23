@@ -5,6 +5,7 @@ import {
   HOME_MENTION_EVENT_KINDS,
   KIND_DELETION,
   KIND_NIP29_DELETE_EVENT,
+  KIND_PAYMENT_RECEIPT,
   KIND_REACTION,
   KIND_STREAM_MESSAGE_EDIT,
 } from "@/shared/constants/kinds";
@@ -97,15 +98,19 @@ export function buildChannelStructuralAuxFilter(
 }
 
 /**
- * Reactions-only filter for the message rows the GUI is currently rendering.
- * Keep this separate from structural aux backfill so the slow kind:5 deletion
- * scan cannot delay reaction pills that affect visible pixels right now.
+ * Row-overlay aux filter for the message rows the GUI is currently rendering:
+ * reactions and payment receipts (same `#e` join machinery). Keep this separate
+ * from structural aux backfill so the slow kind:5 deletion scan cannot delay
+ * overlays that affect visible pixels right now.
  */
 export function buildChannelReactionAuxFilter(
   _channelId: string,
   messageIds: string[],
 ): RelaySubscriptionFilter {
-  return buildChannelAuxKindFilter(messageIds, [KIND_REACTION]);
+  return buildChannelAuxKindFilter(messageIds, [
+    KIND_REACTION,
+    KIND_PAYMENT_RECEIPT,
+  ]);
 }
 
 export function buildChannelAuxDeletionFilter(

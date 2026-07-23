@@ -431,6 +431,20 @@ type MockBridgeOptions = {
    * test can interleave edits and exercise the mid-save race handling.
    */
   globalConfigSaveDelayMs?: number;
+  /** Initial Lightning wallet mock status for U11 specs. */
+  walletStatus?: {
+    linked?: boolean;
+    capabilities?: string[];
+    receive_mode?: string;
+    lud16?: string | null;
+    balance_msat?: number | null;
+  };
+  walletReceiveBolt11?: string;
+  walletConfirmOutcome?:
+    | { status: "settled"; preimage: string }
+    | { status: "failed"; reason: string }
+    | { status: "unknown" }
+    | { status: "already_claimed"; state: string };
 };
 
 type BridgeOptions = {

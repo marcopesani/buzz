@@ -30,9 +30,10 @@ test("buildChannelAuxDeletionFilter keys on #e only, no #h", () => {
   assert.equal("#h" in filter, false);
 });
 
-test("buildChannelReactionAuxFilter fetches only kind:7 by #e", () => {
+test("buildChannelReactionAuxFilter fetches reactions and receipts by #e", () => {
   const filter = buildChannelReactionAuxFilter(CHANNEL, IDS);
-  assert.deepEqual(filter.kinds, [7]);
+  // kind:7 reactions + kind:40010 payment receipts share the row-overlay path.
+  assert.deepEqual(filter.kinds, [7, 40010]);
   assert.deepEqual(filter["#e"], IDS);
   assert.equal("#h" in filter, false);
 });

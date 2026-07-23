@@ -27,7 +27,7 @@ pub struct WalletStatusView {
     pub receive_mode: String,
     /// Static Lightning Address when available.
     pub lud16: Option<String>,
-    /// Balance in msat when fetched; omitted when the facade has no balance API.
+    /// Balance in msat when the linked wallet exposes `get_balance`.
     pub balance_msat: Option<u64>,
 }
 
@@ -286,14 +286,21 @@ impl WalletRuntime {
             _ => secret.lud16.clone(),
         };
 
+        // Best-effort balance: soft-fail to None when reconnect/capability fails.
+        let balance_msat = {
+            let _ = self.ensure_connected().await;
+            match self.wallet().balance().await {
+                Ok(amount) => amount.map(|a| a.as_msat()),
+                Err(_) => None,
+            }
+        };
+
         Ok(WalletStatusView {
             linked: true,
             capabilities,
             receive_mode: receive_mode_label(&receive_mode),
             lud16,
-            // Wallet facade has no get_balance yet; leave None rather than
-            // inventing a second RPC path outside buzz-wallet.
-            balance_msat: None,
+            balance_msat,
         })
     }
 

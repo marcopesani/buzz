@@ -95,6 +95,21 @@ impl Wallet {
         Ok(receive_mode_from_secret(&secret))
     }
 
+    /// Fetch balance (msat) from the linked wallet service.
+    ///
+    /// Returns [`WalletError::SecretUnavailable`] when nothing is linked
+    /// (NotLinked at the driver boundary). `Ok(None)` means the wallet hid
+    /// its balance or lacks `get_balance`.
+    pub async fn balance(&self) -> Result<Option<Amount>, WalletError> {
+        let _secret = self
+            .secrets
+            .load()
+            .await?
+            .ok_or(WalletError::SecretUnavailable)?;
+        let service = self.live_service()?;
+        service.get_balance().await
+    }
+
     /// Interactive receive: mint one bolt11 via `make_invoice`.
     ///
     /// Returns [`WalletError::Unsupported`] when the capability is absent.

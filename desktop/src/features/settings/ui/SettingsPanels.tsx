@@ -21,6 +21,7 @@ import {
   Sun,
   SunMoon,
   UserRound,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import type {
@@ -84,6 +85,7 @@ import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
 import { SettingsSectionHeader } from "./SettingsSectionHeader";
+import { WalletSettingsCard } from "@/features/wallet/WalletSettingsCard";
 
 export type SettingsSection =
   | "profile"
@@ -100,6 +102,7 @@ export type SettingsSection =
   | "custom-emoji"
   | "local-archive"
   | "mobile"
+  | "wallet"
   | "updates";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
@@ -119,6 +122,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "custom-emoji",
   "local-archive",
   "mobile",
+  "wallet",
   "updates",
 ];
 
@@ -225,6 +229,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "mobile",
     label: "Mobile",
     icon: Smartphone,
+  },
+  {
+    value: "wallet",
+    label: "Wallet",
+    icon: Wallet,
   },
   {
     value: "updates",
@@ -841,6 +850,8 @@ export function renderSettingsSection(
       return <LocalArchiveSettingsCard />;
     case "mobile":
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
+    case "wallet":
+      return <WalletSettingsCard />;
     case "updates":
       return <UpdateChecker />;
     default: {

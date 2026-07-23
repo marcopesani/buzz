@@ -25,8 +25,10 @@ import {
 } from "@/features/messages/lib/threadTreeLayout";
 import {
   KIND_HUDDLE_STARTED,
+  KIND_PAYMENT_REQUEST,
   KIND_STREAM_MESSAGE_DIFF,
 } from "@/shared/constants/kinds";
+import { PaymentRequestCard } from "@/features/wallet/PaymentRequestCard";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -334,6 +336,8 @@ export const MessageRow = React.memo(
               onOpenThread={onReply}
             />
           );
+        case KIND_PAYMENT_REQUEST:
+          return <PaymentRequestCard message={message} />;
         default:
           {
             const waveMessage = parseWaveMessageContent(message.body);
@@ -834,6 +838,7 @@ export const MessageRow = React.memo(
     // checks made every row re-render on every streamed event in an open
     // thread (see messageRowEquality.ts).
     reactionsEqual(prev.message.reactions, next.message.reactions) &&
+    prev.message.paymentReceipt?.id === next.message.paymentReceipt?.id &&
     tagsEqual(prev.message.tags, next.message.tags) &&
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&

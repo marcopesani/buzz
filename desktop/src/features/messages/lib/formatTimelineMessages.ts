@@ -29,6 +29,8 @@ import {
   KIND_HUDDLE_STARTED,
   KIND_DELETION,
   KIND_NIP29_DELETE_EVENT,
+  KIND_PAYMENT_RECEIPT,
+  KIND_PAYMENT_REQUEST,
   KIND_REACTION,
   KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_V2,
@@ -36,6 +38,8 @@ import {
   KIND_STREAM_MESSAGE_DIFF,
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
+import { selectWinningReceipt } from "@/features/wallet/selectWinningReceipt";
+import { getReceiptRequestId } from "@/features/wallet/parsePaymentRequest";
 import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { formatTime } from "@/features/messages/lib/dateFormatters";
@@ -58,7 +62,8 @@ export function isTimelineContentEvent(event: RelayEvent) {
     event.kind === KIND_JOB_RESULT ||
     event.kind === KIND_JOB_CANCEL ||
     event.kind === KIND_JOB_ERROR ||
-    event.kind === KIND_HUDDLE_STARTED
+    event.kind === KIND_HUDDLE_STARTED ||
+    event.kind === KIND_PAYMENT_REQUEST
   );
 }
 
@@ -352,6 +357,25 @@ export function formatTimelineMessages(
     reactionsByEventId.set(targetId, current);
   }
 
+  // Payment receipts (40010) ride the same aux `#e` join as reactions —
+  // order-independent by construction (receipt-before-request works).
+  const receiptsByRequestId = new Map<
+    string,
+    Array<{ id: string; createdAt: number }>
+  >();
+  for (const event of events) {
+    if (event.kind !== KIND_PAYMENT_RECEIPT || deletedEventIds.has(event.id)) {
+      continue;
+    }
+    const requestId = getReceiptRequestId(event.tags);
+    if (!requestId || deletedEventIds.has(requestId)) {
+      continue;
+    }
+    const list = receiptsByRequestId.get(requestId) ?? [];
+    list.push({ id: event.id, createdAt: event.created_at });
+    receiptsByRequestId.set(requestId, list);
+  }
+
   const authorPubkeyByEventId = new Map<string, string>();
   const authorLabelByEventId = new Map<string, string>();
   const depthByEventId = new Map<string, number>();
@@ -483,6 +507,12 @@ export function formatTimelineMessages(
           )
           .map(({ earliestCreatedAt: _drop, ...pill }) => pill);
       })(),
+      paymentReceipt:
+        event.kind === KIND_PAYMENT_REQUEST
+          ? selectWinningReceipt(
+              receiptsByRequestId.get(event.id.toLowerCase()) ?? [],
+            )
+          : undefined,
     };
   });
 }

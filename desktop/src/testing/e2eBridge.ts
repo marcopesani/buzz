@@ -393,6 +393,25 @@ type E2eConfig = {
      * spec can interleave edits and exercise the mid-save race handling.
      */
     globalConfigSaveDelayMs?: number;
+    /**
+     * Initial Lightning wallet mock status. Specs mutate via link_wallet /
+     * unlink_wallet; prepare/confirm outcomes are scriptable.
+     */
+    walletStatus?: {
+      linked?: boolean;
+      capabilities?: string[];
+      receive_mode?: string;
+      lud16?: string | null;
+      balance_msat?: number | null;
+    };
+    /** bolt11 returned by wallet_receive. */
+    walletReceiveBolt11?: string;
+    /** Confirm outcome for wallet_confirm (default settled). */
+    walletConfirmOutcome?:
+      | { status: "settled"; preimage: string }
+      | { status: "failed"; reason: string }
+      | { status: "unknown" }
+      | { status: "already_claimed"; state: string };
   };
   relayHttpUrl?: string;
   relayWsUrl?: string;
@@ -2758,6 +2777,81 @@ function resetMockMesh() {
   mockMeshState.denyReason = "not a relay member";
   mockMeshState.nodeState = "off";
   mockMeshState.nodeMode = null;
+}
+
+type MockWalletStatus = {
+  linked: boolean;
+  capabilities: string[];
+  receive_mode: string;
+  lud16: string | null;
+  balance_msat: number | null;
+};
+
+const mockWalletState: {
+  status: MockWalletStatus;
+  receiveBolt11: string;
+  confirmOutcome:
+    | { status: "settled"; preimage: string }
+    | { status: "failed"; reason: string }
+    | { status: "unknown" }
+    | { status: "already_claimed"; state: string };
+  handles: Map<
+    string,
+    {
+      amount_msat: number;
+      bolt11: string;
+      payment_hash: string;
+      expires_at_unix: number;
+      target_description: string | null;
+    }
+  >;
+} = {
+  status: {
+    linked: false,
+    capabilities: [],
+    receive_mode: "unavailable",
+    lud16: null,
+    balance_msat: null,
+  },
+  receiveBolt11:
+    "lnbc210n1pmockinvoice000000000000000000000000000000000000000000000000000",
+  confirmOutcome: {
+    status: "settled",
+    preimage: "ab".repeat(32),
+  },
+  handles: new Map(),
+};
+
+function resetMockWallet(config: E2eConfig | undefined) {
+  const seed = config?.mock?.walletStatus;
+  mockWalletState.status = {
+    linked: seed?.linked ?? false,
+    capabilities: seed?.capabilities ?? [
+      "pay_invoice",
+      "make_invoice",
+      "lookup_invoice",
+      "get_balance",
+    ],
+    receive_mode: seed?.receive_mode ?? "interactive",
+    lud16: seed?.lud16 ?? null,
+    balance_msat: seed?.balance_msat ?? 21_000_000,
+  };
+  if (!seed?.linked) {
+    mockWalletState.status = {
+      linked: false,
+      capabilities: [],
+      receive_mode: "unavailable",
+      lud16: null,
+      balance_msat: null,
+    };
+  }
+  mockWalletState.receiveBolt11 =
+    config?.mock?.walletReceiveBolt11 ?? mockWalletState.receiveBolt11;
+  mockWalletState.confirmOutcome = config?.mock?.walletConfirmOutcome ?? {
+    status: "settled",
+    preimage: "ab".repeat(32),
+  };
+  mockWalletState.handles.clear();
 }
 let mockPersonas: RawPersona[] = [];
 let mockTeams: RawTeam[] = [];
@@ -8868,6 +8962,7 @@ export function maybeInstallE2eTauriMocks() {
   seedMockSearchProfiles(config);
   resetMockWorkflows();
   resetMockMesh();
+  resetMockWallet(config);
   resetMockUserStatuses();
   resetMockSaveSubscriptions(config);
   resetMockPendingCommunityDeepLinks(config);
@@ -10784,6 +10879,95 @@ export function maybeInstallE2eTauriMocks() {
       case "agent_metric_archive_default_enabled":
         return activeConfig?.mock?.agentMetricArchiveDefaultEnabled ?? false;
       case "set_prevent_sleep_active":
+        return null;
+      case "link_wallet": {
+        const { uri } = (payload ?? {}) as { uri?: string };
+        if (!uri?.startsWith("nostr+walletconnect://")) {
+          throw new Error("invalid_uri");
+        }
+        mockWalletState.status = {
+          linked: true,
+          capabilities: [
+            "pay_invoice",
+            "make_invoice",
+            "lookup_invoice",
+            "get_balance",
+          ],
+          receive_mode: "interactive",
+          lud16: "alice@getalby.com",
+          balance_msat: 21_000_000,
+        };
+        return { ...mockWalletState.status };
+      }
+      case "unlink_wallet":
+        mockWalletState.status = {
+          linked: false,
+          capabilities: [],
+          receive_mode: "unavailable",
+          lud16: null,
+          balance_msat: null,
+        };
+        mockWalletState.handles.clear();
+        return null;
+      case "wallet_status":
+        return { ...mockWalletState.status };
+      case "wallet_receive": {
+        if (!mockWalletState.status.linked) {
+          throw new Error("not_linked");
+        }
+        return mockWalletState.receiveBolt11;
+      }
+      case "wallet_prepare_send": {
+        if (!mockWalletState.status.linked) {
+          throw new Error("not_linked");
+        }
+        const args = (payload ?? {}) as {
+          target?: { type?: string; invoice?: string; address?: string };
+          amountMsat?: number;
+          amount_msat?: number;
+          memo?: string | null;
+        };
+        const amountMsat = args.amountMsat ?? args.amount_msat ?? 0;
+        const handleId = `mock-handle-${mockWalletState.handles.size + 1}`;
+        const bolt11 =
+          args.target?.type === "bolt11" && args.target.invoice
+            ? args.target.invoice
+            : mockWalletState.receiveBolt11;
+        const quote = {
+          handle_id: handleId,
+          amount_msat: amountMsat,
+          bolt11,
+          payment_hash: "cd".repeat(32),
+          expires_at_unix: Math.floor(Date.now() / 1000) + 3600,
+          target_description:
+            args.target?.type === "lud16"
+              ? (args.target.address ?? null)
+              : null,
+        };
+        mockWalletState.handles.set(handleId, quote);
+        return quote;
+      }
+      case "wallet_confirm": {
+        const { handleId, handle_id } = (payload ?? {}) as {
+          handleId?: string;
+          handle_id?: string;
+        };
+        const id = handleId ?? handle_id;
+        if (!id || !mockWalletState.handles.has(id)) {
+          throw new Error("unknown_handle");
+        }
+        return mockWalletState.confirmOutcome;
+      }
+      case "wallet_cancel": {
+        const { handleId, handle_id } = (payload ?? {}) as {
+          handleId?: string;
+          handle_id?: string;
+        };
+        const id = handleId ?? handle_id;
+        if (id) mockWalletState.handles.delete(id);
+        return null;
+      }
+      case "wallet_reconcile":
         return null;
       case "plugin:window|is_fullscreen":
         return false;

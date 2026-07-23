@@ -422,6 +422,22 @@ async fn receive_mode_uses_persisted_lud16_without_network() {
     );
 }
 
+/// balance() returns the linked FakeWalletService get_balance (msat).
+#[tokio::test]
+async fn balance_returns_linked_service_balance() {
+    let h = harness_linked();
+    h.wallet.link(VALID_URI).await.expect("link");
+    let bal = h.wallet.balance().await.expect("balance");
+    assert_eq!(bal, Some(Amount::from_msat(100_000_000)));
+    assert!(
+        h.service
+            .calls()
+            .iter()
+            .any(|c| matches!(c, WalletCall::GetBalance)),
+        "get_balance must be called on the linked service"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Feature: Send to a lightning address
 // ---------------------------------------------------------------------------

@@ -58,6 +58,7 @@ const settingsNavGroups: Array<{
       "shortcuts",
       "custom-emoji",
       "local-archive",
+      "wallet",
     ],
   },
   {
