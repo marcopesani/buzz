@@ -18,6 +18,8 @@ pub struct UserProfile {
     pub about: Option<String>,
     /// NIP-05 identifier (user@domain).
     pub nip05_handle: Option<String>,
+    /// Lightning Address (LUD-16) from kind:0 `lud16`.
+    pub lud16: Option<String>,
 }
 
 /// Lightweight user record returned from search.
@@ -68,10 +70,11 @@ pub async fn get_user(
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
     >(
         r#"
-        SELECT pubkey, display_name, avatar_url, about, nip05_handle
+        SELECT pubkey, display_name, avatar_url, about, nip05_handle, lud16
         FROM users
         WHERE community_id = $1 AND pubkey = $2
         "#,
@@ -82,17 +85,18 @@ pub async fn get_user(
     .await?;
 
     Ok(row.map(
-        |(pubkey, display_name, avatar_url, about, nip05_handle)| UserProfile {
+        |(pubkey, display_name, avatar_url, about, nip05_handle, lud16)| UserProfile {
             pubkey,
             display_name,
             avatar_url,
             about,
             nip05_handle,
+            lud16,
         },
     ))
 }
 
-/// Update a user's profile fields (display_name, avatar_url, about, nip05_handle).
+/// Update a user's profile fields (display_name, avatar_url, about, nip05_handle, lud16).
 /// Only updates fields that are Some -- None fields are left unchanged.
 /// At least one field must be Some, otherwise returns Ok(()) without touching the DB.
 ///
@@ -100,6 +104,7 @@ pub async fn get_user(
 /// absolute-state semantics where absent fields must be cleared, and for the
 /// `nip05_handle` column which has a UNIQUE constraint (multiple NULLs are allowed,
 /// but multiple empty strings would violate uniqueness).
+#[allow(clippy::too_many_arguments)] // mirrors absolute-state kind:0 columns one-for-one
 pub async fn update_user_profile(
     pool: &PgPool,
     community_id: CommunityId,
@@ -108,6 +113,7 @@ pub async fn update_user_profile(
     avatar_url: Option<&str>,
     about: Option<&str>,
     nip05_handle: Option<&str>,
+    lud16: Option<&str>,
 ) -> Result<()> {
     let mut set_parts: Vec<String> = Vec::new();
     let mut param_idx = 1u32;
@@ -126,6 +132,10 @@ pub async fn update_user_profile(
     }
     if nip05_handle.is_some() {
         set_parts.push(format!("nip05_handle = ${param_idx}"));
+        param_idx += 1;
+    }
+    if lud16.is_some() {
+        set_parts.push(format!("lud16 = ${param_idx}"));
         param_idx += 1;
     }
 
@@ -158,6 +168,9 @@ pub async fn update_user_profile(
     if nip05_handle.is_some() {
         query = query.bind(empty_to_none(nip05_handle));
     }
+    if lud16.is_some() {
+        query = query.bind(empty_to_none(lud16));
+    }
     query = query.bind(community_id.as_uuid());
     query = query.bind(pubkey);
     query.execute(pool).await?;
@@ -181,10 +194,11 @@ pub async fn get_user_by_nip05(
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
     >(
         r#"
-        SELECT pubkey, display_name, avatar_url, about, nip05_handle
+        SELECT pubkey, display_name, avatar_url, about, nip05_handle, lud16
         FROM users
         WHERE community_id = $1 AND LOWER(nip05_handle) = LOWER($2)
         LIMIT 1
@@ -196,12 +210,13 @@ pub async fn get_user_by_nip05(
     .await?;
 
     Ok(row.map(
-        |(pubkey, display_name, avatar_url, about, nip05_handle)| UserProfile {
+        |(pubkey, display_name, avatar_url, about, nip05_handle, lud16)| UserProfile {
             pubkey,
             display_name,
             avatar_url,
             about,
             nip05_handle,
+            lud16,
         },
     ))
 }
@@ -610,6 +625,54 @@ mod tests {
         ensure_user(&db.pool, community, &pubkey).await.unwrap();
         let result = set_channel_add_policy(&db.pool, community, &pubkey, "invalid_policy").await;
         assert!(result.is_err(), "should reject invalid policy value");
+    }
+
+    /// lud16 follows the same absolute-state empty→NULL path as nip05/about.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn update_user_profile_sets_and_clears_lud16() {
+        let db = setup_db().await;
+        let community = make_community(&db.pool).await;
+        let pk = random_pubkey();
+        ensure_user(&db.pool, community, &pk)
+            .await
+            .expect("ensure user");
+
+        update_user_profile(
+            &db.pool,
+            community,
+            &pk,
+            None,
+            None,
+            None,
+            None,
+            Some("alice@wallet.example"),
+        )
+        .await
+        .expect("set lud16");
+
+        let profile = get_user(&db.pool, community, &pk)
+            .await
+            .expect("get user")
+            .expect("user exists");
+        assert_eq!(
+            profile.lud16.as_deref(),
+            Some("alice@wallet.example"),
+            "lud16 should persist"
+        );
+
+        update_user_profile(&db.pool, community, &pk, None, None, None, None, Some(""))
+            .await
+            .expect("clear lud16");
+
+        let cleared = get_user(&db.pool, community, &pk)
+            .await
+            .expect("get user")
+            .expect("user exists");
+        assert!(
+            cleared.lud16.is_none(),
+            "empty string must clear lud16 to NULL"
+        );
     }
 
     // Use the production `escape_like` function directly — no local mirror.

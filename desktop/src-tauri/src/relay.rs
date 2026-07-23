@@ -403,7 +403,10 @@ fn build_profile_event(
     avatar_url: Option<&str>,
     auth_tag_json: Option<&str>,
 ) -> Result<nostr::Event, String> {
-    let builder = crate::events::build_profile(Some(display_name), None, avatar_url, None, None)?;
+    // Agent profile sync only sets display_name/avatar — same as nip05/about,
+    // lud16 is omitted (agents do not publish a receive address here).
+    let builder =
+        crate::events::build_profile(Some(display_name), None, avatar_url, None, None, None)?;
 
     let builder = if let Some(tag_json) = auth_tag_json {
         // Bridge nostr 0.37 PublicKey → nostr 0.36 PublicKey via hex encoding.

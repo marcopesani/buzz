@@ -159,6 +159,7 @@ async fn publish_profile(ws: &mut Ws, config: &Config) -> Result<()> {
         Some(BOT_ICON_DATA_URL),
         Some(BOT_ABOUT),
         None,
+        None, // no Lightning address for this bot
     )?;
     let profile_event = builder.sign_with_keys(&config.bot_keys)?;
     let profile_event_id = profile_event.id.to_hex();

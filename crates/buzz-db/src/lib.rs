@@ -1802,6 +1802,7 @@ impl Db {
     }
 
     /// Update a user's profile fields.
+    #[allow(clippy::too_many_arguments)] // mirrors absolute-state kind:0 columns one-for-one
     pub async fn update_user_profile(
         &self,
         community_id: CommunityId,
@@ -1810,6 +1811,7 @@ impl Db {
         avatar_url: Option<&str>,
         about: Option<&str>,
         nip05_handle: Option<&str>,
+        lud16: Option<&str>,
     ) -> Result<()> {
         user::update_user_profile(
             &self.pool,
@@ -1819,6 +1821,7 @@ impl Db {
             avatar_url,
             about,
             nip05_handle,
+            lud16,
         )
         .await
     }

@@ -159,6 +159,7 @@ CREATE TABLE users (
     display_name        VARCHAR(255),
     avatar_url          TEXT,
     about               TEXT,
+    lud16               TEXT,
     agent_type          VARCHAR(255),
     capabilities        JSONB,
     okta_user_id        VARCHAR(255),

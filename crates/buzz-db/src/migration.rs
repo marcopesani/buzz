@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 24);
+        assert_eq!(migrations.len(), 25);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -879,6 +879,15 @@ mod tests {
             .to_lowercase()
             .contains("for update"));
         assert!(ttl_shared.contains("NEW.kind <> 9007"));
+
+        // Lightning Address (LUD-16) on users — additive, never folded into 0001.
+        assert_eq!(migrations[24].version, 25);
+        assert_eq!(&*migrations[24].description, "users lud16");
+        assert!(migrations[24]
+            .sql
+            .as_str()
+            .contains("ALTER TABLE users ADD COLUMN lud16"));
+        assert!(!migrations[0].sql.as_str().contains("lud16"));
     }
 
     #[test]
@@ -1121,7 +1130,7 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("retry succeeds after operator repair");
-        assert_eq!(applied_versions(&pool).await.last().copied(), Some(24));
+        assert_eq!(applied_versions(&pool).await.last().copied(), Some(25));
     }
 
     #[tokio::test]

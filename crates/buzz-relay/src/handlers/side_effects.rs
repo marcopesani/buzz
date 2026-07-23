@@ -1145,6 +1145,9 @@ async fn handle_kind0_profile(
         .and_then(|raw| crate::api::nip05::canonicalize_nip05(raw, tenant.host()).ok());
     let nip05_handle = nip05_owned.as_deref().unwrap_or("");
 
+    // Absolute-state: absent `lud16` clears the column (empty → NULL).
+    let lud16 = content.get("lud16").and_then(|v| v.as_str()).unwrap_or("");
+
     let pubkey_bytes = event.pubkey.to_bytes().to_vec();
 
     if state
@@ -1162,7 +1165,7 @@ async fn handle_kind0_profile(
     // Pass all fields as Some — empty string clears the field in the DB.
     // This ensures kind:0 is treated as absolute state, not a partial update.
     // If the NIP-05 handle collides with another user's UNIQUE constraint, retry
-    // without it so display_name/about/avatar_url are still written.
+    // without it so display_name/about/avatar_url/lud16 are still written.
     let result = state
         .db
         .update_user_profile(
@@ -1172,6 +1175,7 @@ async fn handle_kind0_profile(
             Some(avatar_url),
             Some(about),
             Some(nip05_handle),
+            Some(lud16),
         )
         .await;
 
@@ -1189,6 +1193,7 @@ async fn handle_kind0_profile(
                     Some(avatar_url),
                     Some(about),
                     None, // skip contested NIP-05
+                    Some(lud16),
                 )
                 .await?;
         } else {

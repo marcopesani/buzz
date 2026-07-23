@@ -477,6 +477,7 @@ pub fn build_profile(
     picture: Option<&str>,
     about: Option<&str>,
     nip05: Option<&str>,
+    lud16: Option<&str>,
 ) -> Result<EventBuilder, String> {
     let mut map = serde_json::Map::new();
     if let Some(v) = display_name {
@@ -493,6 +494,9 @@ pub fn build_profile(
     }
     if let Some(v) = nip05 {
         map.insert("nip05".into(), serde_json::Value::String(v.into()));
+    }
+    if let Some(v) = lud16 {
+        map.insert("lud16".into(), serde_json::Value::String(v.into()));
     }
     let content = serde_json::Value::Object(map).to_string();
     Ok(EventBuilder::new(Kind::Custom(0), content))
