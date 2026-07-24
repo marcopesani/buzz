@@ -262,6 +262,8 @@ struct PaymentFileRecord {
     amount_msat: u64,
     expires_at_unix: u64,
     state: String,
+    #[serde(default)]
+    preimage: Option<String>,
 }
 
 impl PaymentFileRecord {
@@ -273,6 +275,7 @@ impl PaymentFileRecord {
             amount_msat: r.amount.as_msat(),
             expires_at_unix: r.expires_at_unix,
             state: state_to_str(r.state).to_string(),
+            preimage: r.preimage.clone(),
         }
     }
 
@@ -285,6 +288,7 @@ impl PaymentFileRecord {
             amount: Amount::from_msat(self.amount_msat),
             expires_at_unix: self.expires_at_unix,
             state,
+            preimage: self.preimage,
         })
     }
 }
@@ -403,6 +407,7 @@ impl PaymentStore for JsonPaymentStore {
             amount,
             expires_at_unix,
             state: PersistedPaymentState::Paying,
+            preimage: None,
         };
         records.insert(key, record.clone());
         Self::persist_locked(&self.path, &records)?;
@@ -418,12 +423,16 @@ impl PaymentStore for JsonPaymentStore {
         &self,
         attempt_id: &AttemptId,
         state: PersistedPaymentState,
+        preimage: Option<String>,
     ) -> Result<(), WalletError> {
         let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
         let Some(record) = records.get_mut(attempt_id.as_str()) else {
             return Err(WalletError::Unknown);
         };
         record.state = state;
+        if let Some(preimage) = preimage {
+            record.preimage = Some(preimage);
+        }
         Self::persist_locked(&self.path, &records)
     }
 

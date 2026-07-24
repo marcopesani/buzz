@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bitcoin::hashes::Hash;
 use buzz_core::kind::KIND_PAYMENT_REQUEST;
 use buzz_core::payment::{Amount, PaymentRequest, PaymentTarget};
 use buzz_wallet::{
@@ -338,11 +337,12 @@ async fn cmd_receive(
         .receive(amount, description)
         .await
         .map_err(map_wallet_error)?;
-    let payment_hash = decode_payment_hash(bolt11.as_str())?;
+    let decoded = buzz_wallet::decode_bolt11(&bolt11).map_err(map_wallet_error)?;
     print_json(&serde_json::json!({
         "bolt11": bolt11.as_str(),
-        "payment_hash": payment_hash,
+        "payment_hash": decoded.payment_hash_hex,
         "amount_msat": amount_msat,
+        "expires_at_unix": decoded.expires_at_unix,
     }));
     Ok(())
 }
@@ -620,8 +620,11 @@ async fn cmd_check(ctx: &WalletCtx<'_>, request: &str, channel: &str) -> Result<
 async fn cmd_reconcile(ctx: &WalletCtx<'_>) -> Result<(), CliError> {
     let uri = resolve_nwc_uri()?;
     let wallet = open_wallet(ctx, &uri, false).await?;
-    wallet.reconcile().await.map_err(map_wallet_error)?;
-    print_json(&serde_json::json!({ "reconciled": true }));
+    let settled = wallet.reconcile().await.map_err(map_wallet_error)?;
+    print_json(&serde_json::json!({
+        "reconciled": true,
+        "settled_count": settled.len(),
+    }));
     Ok(())
 }
 
@@ -675,11 +678,6 @@ fn event_tags(event: &serde_json::Value) -> Result<Vec<Vec<String>>, CliError> {
 fn decode_invoice(bolt11: &str) -> Result<Bolt11Invoice, CliError> {
     Bolt11Invoice::from_str(bolt11.trim())
         .map_err(|_| CliError::Usage("invalid bolt11 invoice".into()))
-}
-
-fn decode_payment_hash(bolt11: &str) -> Result<String, CliError> {
-    let invoice = decode_invoice(bolt11)?;
-    Ok(hex::encode(invoice.payment_hash().to_byte_array()))
 }
 
 #[cfg(test)]

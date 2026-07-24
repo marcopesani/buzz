@@ -65,6 +65,7 @@ impl PaymentStore for InMemoryPaymentStore {
             amount,
             expires_at_unix,
             state: PersistedPaymentState::Paying,
+            preimage: None,
         };
         records.insert(key, record.clone());
         Ok(ClaimOutcome::Claimed(record))
@@ -79,12 +80,16 @@ impl PaymentStore for InMemoryPaymentStore {
         &self,
         attempt_id: &AttemptId,
         state: PersistedPaymentState,
+        preimage: Option<String>,
     ) -> Result<(), WalletError> {
         let mut records = self.records.lock().unwrap_or_else(|e| e.into_inner());
         let Some(record) = records.get_mut(attempt_id.as_str()) else {
             return Err(WalletError::Unknown);
         };
         record.state = state;
+        if let Some(preimage) = preimage {
+            record.preimage = Some(preimage);
+        }
         Ok(())
     }
 

@@ -97,7 +97,12 @@ async fn real_adapter_pay_receive_lookup_round_trip() {
     tracing::info!(%preimage, %hash, "pay_invoice returned verifying preimage");
 
     let settled = service.lookup_invoice(&hash).await.expect("lookup settled");
-    assert_eq!(settled, InvoiceStatus::Settled);
+    assert!(matches!(
+        settled,
+        InvoiceStatus::Settled {
+            preimage: Some(ref p)
+        } if p == &preimage
+    ));
 
     wallet.shutdown();
 }

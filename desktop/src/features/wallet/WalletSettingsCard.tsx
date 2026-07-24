@@ -103,11 +103,11 @@ export function WalletSettingsCard() {
     setReceiving(true);
     setReceiveError(null);
     try {
-      const bolt11 = await walletReceive(
+      const invoice = await walletReceive(
         satsToMsat(sats),
         receiveMemo.trim() || null,
       );
-      setReceiveBolt11(bolt11);
+      setReceiveBolt11(invoice.bolt11);
     } catch (err) {
       setReceiveError(err instanceof Error ? err.message : String(err));
     } finally {

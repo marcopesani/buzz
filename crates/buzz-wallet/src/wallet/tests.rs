@@ -10,8 +10,8 @@ use crate::ports::{PaymentStore, SecretStore, WalletService};
 use crate::test_support::{mint_bolt11, mint_bolt11_for_amount, MintInvoiceParams};
 use crate::types::{
     AttemptId, AttemptKey, Bolt11, Capabilities, IncomingStatus, InvoiceStatus, Kind0Fields,
-    PersistedPaymentState, ReceiveMode, ResolvedPay, SendOutcome, SendTarget, StoredSecret,
-    WalletMethod, WalletTimeouts,
+    PaymentRecord, PersistedPaymentState, ReceiveMode, ResolvedPay, SendOutcome, SendTarget,
+    SettledAttempt, StoredSecret, WalletMethod, WalletTimeouts,
 };
 use crate::wallet::Wallet;
 use async_trait::async_trait;
@@ -482,6 +482,10 @@ async fn happy_path() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].state, PersistedPaymentState::Settled);
     assert_eq!(records[0].payment_hash, minted.payment_hash_hex);
+    assert_eq!(
+        records[0].preimage.as_deref(),
+        Some(minted.preimage_hex.as_str())
+    );
 }
 
 /// Scenario: No confirmation, no spend
@@ -908,11 +912,26 @@ async fn unknown_reconciles_to_settled() {
 
     h.service.script_lookup(
         &minted.payment_hash_hex,
-        InvoiceScript::Status(InvoiceStatus::Settled),
+        InvoiceScript::Status(InvoiceStatus::Settled {
+            preimage: Some(minted.preimage_hex.clone()),
+        }),
     );
-    h.wallet.reconcile().await.expect("reconcile");
+    let newly = h.wallet.reconcile().await.expect("reconcile");
 
     assert_eq!(h.store.all()[0].state, PersistedPaymentState::Settled);
+    assert_eq!(
+        h.store.all()[0].preimage.as_deref(),
+        Some(minted.preimage_hex.as_str())
+    );
+    assert_eq!(
+        newly,
+        vec![SettledAttempt {
+            attempt: AttemptKey::Standalone,
+            payment_hash: minted.payment_hash_hex.clone(),
+            preimage: Some(minted.preimage_hex.clone()),
+            amount_msat: 25_000,
+        }]
+    );
     assert_eq!(pay_invoice_calls(&h.service).len(), pay_count_before);
     assert_eq!(lookup_calls(&h.service), vec![minted.payment_hash_hex]);
 }
@@ -1087,7 +1106,7 @@ async fn reconciliation_survives_a_restart() {
     wallet.link(VALID_URI).await.expect("link after restart");
     service.script_lookup(
         &minted.payment_hash_hex,
-        InvoiceScript::Status(InvoiceStatus::Settled),
+        InvoiceScript::Status(InvoiceStatus::Settled { preimage: None }),
     );
     wallet.reconcile().await.expect("reconcile");
 
@@ -1121,6 +1140,7 @@ async fn a_community_switch_does_not_orphan_a_pending_payment() {
         .update_state(
             &AttemptId::new("request:card-x"),
             PersistedPaymentState::Unknown,
+            None,
         )
         .await
         .expect("mark unknown");
@@ -1142,7 +1162,7 @@ async fn a_community_switch_does_not_orphan_a_pending_payment() {
 
     service_x.script_lookup(
         &minted.payment_hash_hex,
-        InvoiceScript::Status(InvoiceStatus::Settled),
+        InvoiceScript::Status(InvoiceStatus::Settled { preimage: None }),
     );
     wallet_x.reconcile().await.expect("reconcile x");
     assert_eq!(store_x.all()[0].state, PersistedPaymentState::Settled);
@@ -1191,7 +1211,7 @@ async fn the_payee_confirms_from_its_own_wallet() {
 
     h.service.script_lookup(
         &minted.payment_hash_hex,
-        InvoiceScript::Status(InvoiceStatus::Settled),
+        InvoiceScript::Status(InvoiceStatus::Settled { preimage: None }),
     );
     let status = h.wallet.check_incoming(&request).await.expect("check");
     assert_eq!(status, IncomingStatus::Paid);
@@ -1218,4 +1238,170 @@ async fn a_lud16_only_request_is_not_confirmable() {
         lookup_calls(&h.service).is_empty(),
         "lud16-only has no hash to look up"
     );
+}
+
+// ---------------------------------------------------------------------------
+// V1: preimage through settlement
+// ---------------------------------------------------------------------------
+
+/// Scenario: confirm-settles persists preimage on the record
+#[tokio::test]
+async fn confirm_settles_persists_preimage_on_the_record() {
+    let h = harness_linked();
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(21_000);
+    let minted = mint_bolt11_for_amount(21_000, 0xc1, CLOCK_NOW);
+    h.service.script_pay(PayScript::Settle {
+        preimage: minted.preimage_hex.clone(),
+    });
+
+    let handle = h
+        .wallet
+        .prepare_send(
+            AttemptKey::Standalone,
+            SendTarget::Bolt11(minted.bolt11.clone()),
+            amount,
+            None,
+        )
+        .await
+        .expect("prepare");
+    let outcome = h.wallet.confirm(&handle).await.expect("confirm");
+    assert!(matches!(outcome, SendOutcome::Settled { .. }));
+
+    let record = &h.store.all()[0];
+    assert_eq!(record.state, PersistedPaymentState::Settled);
+    assert_eq!(
+        record.preimage.as_deref(),
+        Some(minted.preimage_hex.as_str())
+    );
+}
+
+/// Scenario: Unknown→reconcile-settled returns the attempt WITH preimage and
+/// persists it; pay_invoice never re-fired
+#[tokio::test(start_paused = true)]
+async fn unknown_reconcile_settled_returns_attempt_with_preimage() {
+    let h = harness_with_timeouts(short_pay_timeouts());
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(25_000);
+    let minted = mint_bolt11_for_amount(25_000, 0xc2, CLOCK_NOW);
+    h.service.script_pay(PayScript::NeverRespond);
+
+    let event_id = "req-event-v1-preimage".to_string();
+    let handle = h
+        .wallet
+        .prepare_send(
+            AttemptKey::PayRequest {
+                event_id: event_id.clone(),
+            },
+            SendTarget::Bolt11(minted.bolt11.clone()),
+            amount,
+            None,
+        )
+        .await
+        .expect("prepare");
+    assert_eq!(
+        h.wallet.confirm(&handle).await.expect("confirm"),
+        SendOutcome::Unknown
+    );
+    let pay_count = pay_invoice_calls(&h.service).len();
+    assert_eq!(pay_count, 1);
+
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::Settled {
+            preimage: Some(minted.preimage_hex.clone()),
+        }),
+    );
+    let newly = h.wallet.reconcile().await.expect("reconcile");
+    assert_eq!(
+        newly,
+        vec![SettledAttempt {
+            attempt: AttemptKey::PayRequest { event_id },
+            payment_hash: minted.payment_hash_hex.clone(),
+            preimage: Some(minted.preimage_hex.clone()),
+            amount_msat: 25_000,
+        }]
+    );
+    assert_eq!(
+        h.store.all()[0].preimage.as_deref(),
+        Some(minted.preimage_hex.as_str())
+    );
+    assert_eq!(
+        pay_invoice_calls(&h.service).len(),
+        pay_count,
+        "reconcile must never re-fire pay_invoice"
+    );
+}
+
+/// Scenario: reconcile returns ONLY newly settled attempts
+#[tokio::test(start_paused = true)]
+async fn reconcile_returns_only_newly_settled_attempts() {
+    let h = harness_with_timeouts(short_pay_timeouts());
+    h.wallet.link(VALID_URI).await.expect("link");
+
+    let amount = Amount::from_msat(25_000);
+    let minted = mint_bolt11_for_amount(25_000, 0xc3, CLOCK_NOW);
+    h.service.script_pay(PayScript::NeverRespond);
+
+    let handle = h
+        .wallet
+        .prepare_send(
+            AttemptKey::PayRequest {
+                event_id: "req-once".into(),
+            },
+            SendTarget::Bolt11(minted.bolt11.clone()),
+            amount,
+            None,
+        )
+        .await
+        .expect("prepare");
+    assert_eq!(
+        h.wallet.confirm(&handle).await.expect("confirm"),
+        SendOutcome::Unknown
+    );
+
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::Settled {
+            preimage: Some(minted.preimage_hex.clone()),
+        }),
+    );
+    let first = h.wallet.reconcile().await.expect("first reconcile");
+    assert_eq!(first.len(), 1);
+
+    // Already Settled — second pass must not re-report.
+    h.service.script_lookup(
+        &minted.payment_hash_hex,
+        InvoiceScript::Status(InvoiceStatus::Settled {
+            preimage: Some(minted.preimage_hex.clone()),
+        }),
+    );
+    let second = h.wallet.reconcile().await.expect("second reconcile");
+    assert!(
+        second.is_empty(),
+        "already-Settled records must not reappear"
+    );
+}
+
+/// Scenario: legacy record JSON without preimage deserializes (serde default)
+#[test]
+fn legacy_payment_record_json_without_preimage_deserializes() {
+    let json = r#"{
+        "attempt_id": "request:legacy-evt",
+        "payment_hash": "aa",
+        "bolt11": "lnbc1legacy",
+        "amount_msat": 21000,
+        "expires_at_unix": 1700003600,
+        "state": "settled"
+    }"#;
+    let record: PaymentRecord = serde_json::from_str(json).expect("legacy deserialize");
+    assert_eq!(record.preimage, None);
+    assert_eq!(record.state, PersistedPaymentState::Settled);
+    assert_eq!(record.amount.as_msat(), 21_000);
+
+    let roundtrip = serde_json::to_string(&record).expect("serialize");
+    let again: PaymentRecord = serde_json::from_str(&roundtrip).expect("roundtrip");
+    assert_eq!(again, record);
 }

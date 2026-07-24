@@ -30,6 +30,8 @@ struct StoredRecord {
     amount_msat: u64,
     expires_at_unix: u64,
     state: String,
+    #[serde(default)]
+    preimage: Option<String>,
 }
 
 impl StoredRecord {
@@ -41,6 +43,7 @@ impl StoredRecord {
             amount_msat: record.amount.as_msat(),
             expires_at_unix: record.expires_at_unix,
             state: state_to_str(record.state).to_string(),
+            preimage: record.preimage.clone(),
         }
     }
 
@@ -52,6 +55,7 @@ impl StoredRecord {
             amount: Amount::from_msat(self.amount_msat),
             expires_at_unix: self.expires_at_unix,
             state: state_from_str(&self.state)?,
+            preimage: self.preimage,
         })
     }
 }
@@ -147,6 +151,7 @@ impl PaymentStore for JsonPaymentStore {
             amount,
             expires_at_unix,
             state: PersistedPaymentState::Paying,
+            preimage: None,
         };
         map.insert(key, record.clone());
         self.save_map(&map)?;
@@ -163,6 +168,7 @@ impl PaymentStore for JsonPaymentStore {
         &self,
         attempt_id: &AttemptId,
         state: PersistedPaymentState,
+        preimage: Option<String>,
     ) -> Result<(), WalletError> {
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut map = self.load_map()?;
@@ -170,6 +176,9 @@ impl PaymentStore for JsonPaymentStore {
             return Err(WalletError::Unknown);
         };
         record.state = state;
+        if let Some(preimage) = preimage {
+            record.preimage = Some(preimage);
+        }
         self.save_map(&map)?;
         Ok(())
     }

@@ -3,8 +3,8 @@
 use tauri::State;
 
 use crate::wallet::{
-    AttemptKeyDto, PrepareSendQuote, SendConfirmOutcome, SendTargetDto, WalletManager,
-    WalletStatusView,
+    AttemptKeyDto, CheckIncomingDto, IncomingCheckOutcome, PrepareSendQuote, ReceiveInvoice,
+    SendConfirmOutcome, SendTargetDto, SettledPayRequestDto, WalletManager, WalletStatusView,
 };
 
 /// Link an NWC wallet. The URI is accepted once and never returned.
@@ -28,13 +28,13 @@ pub async fn wallet_status(manager: State<'_, WalletManager>) -> Result<WalletSt
     manager.wallet_status().await
 }
 
-/// Mint a receive invoice (msat).
+/// Mint a receive invoice (msat) — returns bolt11, payment_hash, expiry.
 #[tauri::command]
 pub async fn wallet_receive(
     amount_msat: u64,
     description: Option<String>,
     manager: State<'_, WalletManager>,
-) -> Result<String, String> {
+) -> Result<ReceiveInvoice, String> {
     manager.wallet_receive(amount_msat, description).await
 }
 
@@ -71,7 +71,23 @@ pub async fn wallet_cancel(
 }
 
 /// Drain Paying/Unknown records via lookup_invoice.
+///
+/// Returns newly settled pay-request attempts (for receipt publishing).
 #[tauri::command]
-pub async fn wallet_reconcile(manager: State<'_, WalletManager>) -> Result<(), String> {
+pub async fn wallet_reconcile(
+    manager: State<'_, WalletManager>,
+) -> Result<Vec<SettledPayRequestDto>, String> {
     manager.wallet_reconcile().await
+}
+
+/// Confirm an incoming payment request against this wallet only.
+#[tauri::command]
+pub async fn wallet_check_incoming(
+    bolt11: Option<String>,
+    lud16: Option<String>,
+    manager: State<'_, WalletManager>,
+) -> Result<IncomingCheckOutcome, String> {
+    manager
+        .wallet_check_incoming(CheckIncomingDto { bolt11, lud16 })
+        .await
 }

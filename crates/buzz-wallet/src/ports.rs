@@ -106,10 +106,14 @@ pub trait PaymentStore: Send + Sync {
     async fn get(&self, attempt_id: &AttemptId) -> Result<Option<PaymentRecord>, WalletError>;
 
     /// Update the persisted state of an existing attempt.
+    ///
+    /// When `preimage` is `Some`, it is stored on the record (settlement proof).
+    /// `None` leaves any existing preimage untouched — never clears a known proof.
     async fn update_state(
         &self,
         attempt_id: &AttemptId,
         state: PersistedPaymentState,
+        preimage: Option<String>,
     ) -> Result<(), WalletError>;
 
     /// List records whose state is in `states` (for reconcile).

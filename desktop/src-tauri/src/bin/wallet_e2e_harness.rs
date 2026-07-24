@@ -15,8 +15,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use buzz_lib::wallet::{
-    AttemptKeyDto, JsonPaymentStore, KeyringNwcSecretStore, MapBlobBackend, SendTargetDto,
-    WalletPorts, WalletRuntime,
+    AttemptKeyDto, CheckIncomingDto, JsonPaymentStore, KeyringNwcSecretStore, MapBlobBackend,
+    SendTargetDto, WalletPorts, WalletRuntime,
 };
 use buzz_mock_wallet::{MockWallet, MockWalletConfig};
 use buzz_wallet_pkg::fakes::RecordingProfilePublisher;
@@ -134,14 +134,11 @@ async fn mint_payee(
             Ok((minted.bolt11, minted.payment_hash_hex))
         }
         Payee::Real { .. } => {
-            let bolt11 = state
+            let invoice = state
                 .runtime
                 .receive(amount_msat, Some(description))
                 .await?;
-            let hash =
-                buzz_wallet_pkg::payment_hash_hex(&buzz_wallet_pkg::Bolt11::new(bolt11.clone()))
-                    .map_err(|e| e.to_string())?;
-            Ok((bolt11, hash))
+            Ok((invoice.bolt11, invoice.payment_hash))
         }
     }
 }
@@ -198,8 +195,8 @@ async fn dispatch_cmd(runtime: &WalletRuntime, cmd: &str, args: &Value) -> Resul
             let amount_msat = arg_u64(args, "amountMsat", "amount_msat")
                 .ok_or_else(|| "missing amount_msat".to_string())?;
             let description = arg_string(args, "description", "description");
-            let bolt11 = runtime.receive(amount_msat, description.as_deref()).await?;
-            Ok(Value::String(bolt11))
+            let invoice = runtime.receive(amount_msat, description.as_deref()).await?;
+            serde_json::to_value(invoice).map_err(|e| e.to_string())
         }
         "wallet_prepare_send" => {
             let amount_msat = arg_u64(args, "amountMsat", "amount_msat")
@@ -235,8 +232,16 @@ async fn dispatch_cmd(runtime: &WalletRuntime, cmd: &str, args: &Value) -> Resul
             Ok(Value::Null)
         }
         "wallet_reconcile" => {
-            runtime.reconcile().await?;
-            Ok(Value::Null)
+            let settled = runtime.reconcile().await?;
+            serde_json::to_value(settled).map_err(|e| e.to_string())
+        }
+        "wallet_check_incoming" => {
+            let bolt11 = arg_string(args, "bolt11", "bolt11");
+            let lud16 = arg_string(args, "lud16", "lud16");
+            let outcome = runtime
+                .check_incoming(CheckIncomingDto { bolt11, lud16 })
+                .await?;
+            serde_json::to_value(outcome).map_err(|e| e.to_string())
         }
         other => Err(format!("unknown_cmd:{other}")),
     }

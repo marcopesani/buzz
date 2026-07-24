@@ -2,6 +2,7 @@
 
 use crate::error::WalletError;
 use buzz_core::payment::Amount;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
@@ -24,7 +25,8 @@ pub struct WalletTimeouts {
 /// Decoding (amount, payment_hash, expiry) lives in the send use-case —
 /// this newtype keeps the rest of the domain from treating the string as
 /// structured data.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Bolt11(String);
 
 impl Bolt11 {
@@ -73,7 +75,8 @@ impl From<&str> for Bolt11 {
 /// Distinct from [`payment_hash`](PaymentRecord::payment_hash): a double-tap
 /// on a `lud16` card mints two invoices with two hashes that must still share
 /// one attempt id (see [`AttemptKey`]).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct AttemptId(String);
 
 impl AttemptId {
@@ -85,6 +88,20 @@ impl AttemptId {
     /// Borrow the id string.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Recover the prepare-time [`AttemptKey`] shape from a latched id.
+    ///
+    /// Standalone UUID suffixes are discarded — only the pay-request event id
+    /// is recoverable. Used by reconcile callers that filter receipt-relevant
+    /// attempts.
+    pub fn to_attempt_key(&self) -> AttemptKey {
+        match self.0.strip_prefix("request:") {
+            Some(event_id) => AttemptKey::PayRequest {
+                event_id: event_id.to_string(),
+            },
+            None => AttemptKey::Standalone,
+        }
     }
 }
 
@@ -312,8 +329,11 @@ impl WalletAdvertisement {
 /// `WalletError`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvoiceStatus {
-    /// Invoice paid; preimage known to the wallet.
-    Settled,
+    /// Invoice paid — preimage rides this variant when the wallet revealed it.
+    Settled {
+        /// Hex-encoded payment preimage when the wallet included it.
+        preimage: Option<String>,
+    },
     /// Payment in flight or invoice unpaid but live.
     Pending,
     /// Payment definitively failed.
@@ -355,7 +375,8 @@ pub struct ResolvedPay {
 /// Persisted payment states in [`PaymentStore`](crate::ports::PaymentStore).
 ///
 /// Pre-claim states (`Resolving`, `ReadyToConfirm`) live in memory only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PersistedPaymentState {
     /// Human confirmed; `pay_invoice` may be in flight or about to fire.
     Paying,
@@ -368,7 +389,7 @@ pub enum PersistedPaymentState {
 }
 
 /// Durable payment attempt record (per community).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentRecord {
     /// Attempt identity (confirm-handle / request) — latch key.
     pub attempt_id: AttemptId,
@@ -377,6 +398,7 @@ pub struct PaymentRecord {
     /// Opaque bolt11 that was (or will be) paid.
     pub bolt11: Bolt11,
     /// Amount in millisatoshis.
+    #[serde(rename = "amount_msat", with = "amount_msat_serde")]
     pub amount: Amount,
     /// Unix seconds when the bound invoice expires.
     ///
@@ -385,6 +407,38 @@ pub struct PaymentRecord {
     pub expires_at_unix: u64,
     /// Persisted lifecycle state.
     pub state: PersistedPaymentState,
+    /// Settlement proof when known — rides Settled; absent on legacy files.
+    #[serde(default)]
+    pub preimage: Option<String>,
+}
+
+mod amount_msat_serde {
+    use buzz_core::payment::Amount;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(amount: &Amount, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(amount.as_msat())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Amount, D::Error> {
+        let msat = u64::deserialize(deserializer)?;
+        Ok(Amount::from_msat(msat))
+    }
+}
+
+/// One attempt that transitioned to Settled during a reconcile pass.
+///
+/// Already-Settled records are not re-reported — only *newly* settled ones.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettledAttempt {
+    /// Prepare-time key — [`AttemptKey::PayRequest`] keeps the request event id.
+    pub attempt: AttemptKey,
+    /// Hex-encoded payment hash of the settled bolt11.
+    pub payment_hash: String,
+    /// Preimage from `lookup_invoice` when the wallet provided it.
+    pub preimage: Option<String>,
+    /// Amount in millisatoshis.
+    pub amount_msat: u64,
 }
 
 /// Result of an atomic [`claim_paying`](crate::ports::PaymentStore::claim_paying).

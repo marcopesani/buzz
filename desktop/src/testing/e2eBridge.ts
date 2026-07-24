@@ -406,7 +406,7 @@ type E2eConfig = {
       lud16?: string | null;
       balance_msat?: number | null;
     };
-    /** bolt11 returned by wallet_receive. */
+    /** bolt11 returned by wallet_receive (wrapped in ReceiveInvoice shape). */
     walletReceiveBolt11?: string;
     /** Confirm outcome for wallet_confirm (default settled). */
     walletConfirmOutcome?:
@@ -414,6 +414,18 @@ type E2eConfig = {
       | { status: "failed"; reason: string }
       | { status: "unknown" }
       | { status: "already_claimed"; state: string };
+    /** Incoming check outcome for wallet_check_incoming (default unpaid). */
+    walletCheckIncomingOutcome?:
+      | { status: "paid" }
+      | { status: "unpaid" }
+      | { status: "unconfirmable" };
+    /** Settled pay-request rows returned by wallet_reconcile (default []). */
+    walletReconcileSettled?: Array<{
+      request_event_id: string;
+      payment_hash: string;
+      preimage: string | null;
+      amount_msat: number;
+    }>;
     /**
      * Override the `discover_agent_models` mock response. When set, returns
      * this catalog instead of the default per-harness model list.
@@ -962,6 +974,7 @@ const WALLET_PROXY_COMMANDS = new Set([
   "wallet_confirm",
   "wallet_cancel",
   "wallet_reconcile",
+  "wallet_check_incoming",
 ]);
 
 async function proxyWalletCommand(
@@ -2861,6 +2874,16 @@ const mockWalletState: {
     | { status: "failed"; reason: string }
     | { status: "unknown" }
     | { status: "already_claimed"; state: string };
+  checkIncomingOutcome:
+    | { status: "paid" }
+    | { status: "unpaid" }
+    | { status: "unconfirmable" };
+  reconcileSettled: Array<{
+    request_event_id: string;
+    payment_hash: string;
+    preimage: string | null;
+    amount_msat: number;
+  }>;
   handles: Map<
     string,
     {
@@ -2885,6 +2908,8 @@ const mockWalletState: {
     status: "settled",
     preimage: "ab".repeat(32),
   },
+  checkIncomingOutcome: { status: "unpaid" },
+  reconcileSettled: [],
   handles: new Map(),
 };
 
@@ -2917,6 +2942,9 @@ function resetMockWallet(config: E2eConfig | undefined) {
     status: "settled",
     preimage: "ab".repeat(32),
   };
+  mockWalletState.checkIncomingOutcome = config?.mock
+    ?.walletCheckIncomingOutcome ?? { status: "unpaid" };
+  mockWalletState.reconcileSettled = config?.mock?.walletReconcileSettled ?? [];
   mockWalletState.handles.clear();
 }
 let mockPersonas: RawPersona[] = [];
@@ -11033,7 +11061,11 @@ export function maybeInstallE2eTauriMocks() {
         if (!mockWalletState.status.linked) {
           throw new Error("not_linked");
         }
-        return mockWalletState.receiveBolt11;
+        return {
+          bolt11: mockWalletState.receiveBolt11,
+          payment_hash: "cd".repeat(32),
+          expires_at_unix: Math.floor(Date.now() / 1000) + 3600,
+        };
       }
       case "wallet_prepare_send": {
         if (!mockWalletState.status.linked) {
@@ -11086,7 +11118,13 @@ export function maybeInstallE2eTauriMocks() {
         return null;
       }
       case "wallet_reconcile":
-        return null;
+        return [...mockWalletState.reconcileSettled];
+      case "wallet_check_incoming": {
+        if (!mockWalletState.status.linked) {
+          throw new Error("not_linked");
+        }
+        return { ...mockWalletState.checkIncomingOutcome };
+      }
       case "plugin:window|is_fullscreen":
         return false;
       case "merge_save_subscription_kinds": {

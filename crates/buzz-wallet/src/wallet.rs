@@ -8,8 +8,8 @@ use crate::ports::{
 };
 use crate::types::{
     AttemptKey, Bolt11, Capabilities, ClaimOutcome, ConfirmHandle, IncomingStatus, InvoiceStatus,
-    Kind0Fields, PersistedPaymentState, ReceiveMode, SendOutcome, SendTarget, StoredSecret,
-    WalletHandle, WalletMethod, WalletTimeouts,
+    Kind0Fields, PersistedPaymentState, ReceiveMode, SendOutcome, SendTarget, SettledAttempt,
+    StoredSecret, WalletHandle, WalletMethod, WalletTimeouts,
 };
 use buzz_core::payment::{Amount, PaymentRequest, PaymentTarget};
 use std::sync::{Arc, Mutex};
@@ -192,19 +192,23 @@ impl Wallet {
         {
             Ok(Ok(preimage)) => {
                 self.store
-                    .update_state(&handle.attempt_id, PersistedPaymentState::Settled)
+                    .update_state(
+                        &handle.attempt_id,
+                        PersistedPaymentState::Settled,
+                        Some(preimage.clone()),
+                    )
                     .await?;
                 Ok(SendOutcome::Settled { preimage })
             }
             Ok(Err(err)) if is_definitive_pay_error(&err) => {
                 self.store
-                    .update_state(&handle.attempt_id, PersistedPaymentState::Failed)
+                    .update_state(&handle.attempt_id, PersistedPaymentState::Failed, None)
                     .await?;
                 Ok(SendOutcome::Failed { reason: err })
             }
             Ok(Err(WalletError::Unknown)) | Err(_) => {
                 self.store
-                    .update_state(&handle.attempt_id, PersistedPaymentState::Unknown)
+                    .update_state(&handle.attempt_id, PersistedPaymentState::Unknown, None)
                     .await?;
                 Ok(SendOutcome::Unknown)
             }
@@ -221,7 +225,8 @@ impl Wallet {
     /// Drain every `Paying` / `Unknown` record via `lookup_invoice`.
     ///
     /// The only exit from Unknown. Never calls `pay_invoice`.
-    pub async fn reconcile(&self) -> Result<(), WalletError> {
+    /// Returns attempts that newly transitioned to Settled this pass.
+    pub async fn reconcile(&self) -> Result<Vec<SettledAttempt>, WalletError> {
         let pending = self
             .store
             .list_by_states(&[
@@ -231,14 +236,25 @@ impl Wallet {
             .await?;
         let service = self.live_service()?;
         let now = self.clock.now_unix();
+        let mut newly_settled = Vec::new();
         for record in pending {
             let status = service.lookup_invoice(&record.payment_hash).await?;
-            let next = reconcile_next_state(status, now, record.expires_at_unix);
+            let (next, preimage) = reconcile_transition(status, now, record.expires_at_unix);
             if next != record.state {
-                self.store.update_state(&record.attempt_id, next).await?;
+                self.store
+                    .update_state(&record.attempt_id, next, preimage.clone())
+                    .await?;
+                if next == PersistedPaymentState::Settled {
+                    newly_settled.push(SettledAttempt {
+                        attempt: record.attempt_id.to_attempt_key(),
+                        payment_hash: record.payment_hash,
+                        preimage,
+                        amount_msat: record.amount.as_msat(),
+                    });
+                }
             }
         }
-        Ok(())
+        Ok(newly_settled)
     }
 
     /// Confirm an incoming payment against **this** wallet only.
@@ -258,7 +274,7 @@ impl Wallet {
         let hash = payment_hash_hex(&bolt11)?;
         let service = self.live_service()?;
         match service.lookup_invoice(&hash).await? {
-            InvoiceStatus::Settled => Ok(IncomingStatus::Paid),
+            InvoiceStatus::Settled { .. } => Ok(IncomingStatus::Paid),
             InvoiceStatus::Pending
             | InvoiceStatus::Failed
             | InvoiceStatus::Expired
@@ -332,21 +348,23 @@ fn is_definitive_pay_error(err: &WalletError) -> bool {
     )
 }
 
-/// One match: `lookup_invoice` status → next persisted state.
+/// One match: `lookup_invoice` status → next persisted state + optional preimage.
 ///
 /// Pending / NotFound-before-expiry land on Unknown (re-poll). NotFound past
 /// invoice expiry is Failed — early fail invites a double pay on retry.
-fn reconcile_next_state(
+fn reconcile_transition(
     status: InvoiceStatus,
     now_unix: u64,
     expires_at_unix: u64,
-) -> PersistedPaymentState {
+) -> (PersistedPaymentState, Option<String>) {
     match status {
-        InvoiceStatus::Settled => PersistedPaymentState::Settled,
-        InvoiceStatus::Failed | InvoiceStatus::Expired => PersistedPaymentState::Failed,
-        InvoiceStatus::Pending => PersistedPaymentState::Unknown,
-        InvoiceStatus::NotFound if now_unix >= expires_at_unix => PersistedPaymentState::Failed,
-        InvoiceStatus::NotFound => PersistedPaymentState::Unknown,
+        InvoiceStatus::Settled { preimage } => (PersistedPaymentState::Settled, preimage),
+        InvoiceStatus::Failed | InvoiceStatus::Expired => (PersistedPaymentState::Failed, None),
+        InvoiceStatus::Pending => (PersistedPaymentState::Unknown, None),
+        InvoiceStatus::NotFound if now_unix >= expires_at_unix => {
+            (PersistedPaymentState::Failed, None)
+        }
+        InvoiceStatus::NotFound => (PersistedPaymentState::Unknown, None),
     }
 }
 

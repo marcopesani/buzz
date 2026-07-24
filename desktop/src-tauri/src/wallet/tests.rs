@@ -270,7 +270,7 @@ async fn community_switch_does_not_orphan_pending_payment() {
         .expect("claim");
     assert!(matches!(claim, ClaimOutcome::Claimed(_)));
     store_a
-        .update_state(&attempt, PersistedPaymentState::Unknown)
+        .update_state(&attempt, PersistedPaymentState::Unknown, None)
         .await
         .expect("park unknown");
 
@@ -305,7 +305,9 @@ async fn community_switch_does_not_orphan_pending_payment() {
     let service_a = Arc::new(FakeWalletService::new());
     service_a.script_lookup(
         &minted.payment_hash_hex,
-        InvoiceScript::Status(InvoiceStatus::Settled),
+        InvoiceScript::Status(InvoiceStatus::Settled {
+            preimage: Some(minted.preimage_hex.clone()),
+        }),
     );
     let connector_a = Arc::new(FakeWalletConnector::new());
     let store_a2 = Arc::new(JsonPaymentStore::open(&path_a).expect("reopen a"));

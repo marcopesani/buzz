@@ -1,11 +1,11 @@
 //! Per-community wallet session: facade + confirm-handle registry.
 
 use crate::wallet::error::map_wallet_error;
-use buzz_core_pkg::payment::Amount;
+use buzz_core_pkg::payment::{Amount, PaymentRequest, PaymentTarget};
 use buzz_wallet_pkg::{
-    AttemptKey, Bolt11, Clock, ConfirmHandle, LnurlResolver, PaymentStore, PersistedPaymentState,
-    ProfilePublisher, ReceiveMode, SecretStore, SendOutcome, SendTarget, Wallet, WalletConnector,
-    WalletTimeouts,
+    decode_bolt11, AttemptKey, Bolt11, Clock, ConfirmHandle, IncomingStatus, LnurlResolver,
+    PaymentStore, PersistedPaymentState, ProfilePublisher, ReceiveMode, SecretStore, SendOutcome,
+    SendTarget, SettledAttempt, Wallet, WalletConnector, WalletTimeouts,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,6 +48,17 @@ pub struct PrepareSendQuote {
     pub target_description: Option<String>,
 }
 
+/// Minted receive invoice — bolt11 plus mint-time hash and expiry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReceiveInvoice {
+    /// Opaque bolt11 for QR / copy.
+    pub bolt11: String,
+    /// Hex payment hash (for kind-40009 payment-request events).
+    pub payment_hash: String,
+    /// Invoice expiry (unix seconds).
+    pub expires_at_unix: u64,
+}
+
 /// Serializable confirm outcome for the webview.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -69,6 +80,40 @@ pub enum SendConfirmOutcome {
         /// Persisted state name.
         state: String,
     },
+}
+
+/// Local settlement check for an incoming payment request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum IncomingCheckOutcome {
+    /// Own wallet reports the request's payment_hash as settled.
+    Paid,
+    /// Request carries a bolt11 whose hash is not settled in this wallet.
+    Unpaid,
+    /// `lud16`-only request — no hash the payee can look up.
+    Unconfirmable,
+}
+
+/// Minimal payment-request target for [`Wallet::check_incoming`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct CheckIncomingDto {
+    /// Optional bolt11 from the kind-40009 request.
+    pub bolt11: Option<String>,
+    /// Optional Lightning Address from the kind-40009 request.
+    pub lud16: Option<String>,
+}
+
+/// A pay-request attempt that newly settled during reconcile (receipt-relevant).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SettledPayRequestDto {
+    /// Kind-40009 request event id.
+    pub request_event_id: String,
+    /// Hex payment hash.
+    pub payment_hash: String,
+    /// Preimage when known from lookup / settle.
+    pub preimage: Option<String>,
+    /// Amount in millisatoshis.
+    pub amount_msat: u64,
 }
 
 /// Send target from the webview.
@@ -304,12 +349,12 @@ impl WalletRuntime {
         })
     }
 
-    /// Interactive receive → bolt11 string.
+    /// Interactive receive → bolt11 + payment_hash + expiry.
     pub async fn receive(
         &self,
         amount_msat: u64,
         description: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<ReceiveInvoice, String> {
         self.require_linked().await?;
         self.ensure_connected().await?;
         let bolt11 = self
@@ -317,7 +362,12 @@ impl WalletRuntime {
             .receive(Amount::from_msat(amount_msat), description)
             .await
             .map_err(map_wallet_error)?;
-        Ok(bolt11.into_inner())
+        let decoded = decode_bolt11(&bolt11).map_err(map_wallet_error)?;
+        Ok(ReceiveInvoice {
+            bolt11: bolt11.into_inner(),
+            payment_hash: decoded.payment_hash_hex,
+            expires_at_unix: decoded.expires_at_unix,
+        })
     }
 
     /// Prepare send and stash the confirm handle under an opaque id.
@@ -407,7 +457,9 @@ impl WalletRuntime {
     }
 
     /// Drive [`Wallet::reconcile`]. No-op when unlinked.
-    pub async fn reconcile(&self) -> Result<(), String> {
+    ///
+    /// Returns newly settled **pay_request** attempts (standalone sends omitted).
+    pub async fn reconcile(&self) -> Result<Vec<SettledPayRequestDto>, String> {
         if self
             .ports
             .secrets
@@ -416,9 +468,64 @@ impl WalletRuntime {
             .map_err(map_wallet_error)?
             .is_none()
         {
-            return Ok(());
+            return Ok(Vec::new());
         }
         self.ensure_connected().await?;
-        self.wallet().reconcile().await.map_err(map_wallet_error)
+        let settled = self.wallet().reconcile().await.map_err(map_wallet_error)?;
+        Ok(settled
+            .into_iter()
+            .filter_map(settled_pay_request_dto)
+            .collect())
     }
+
+    /// Local check that an incoming payment request settled in this wallet.
+    pub async fn check_incoming(
+        &self,
+        dto: CheckIncomingDto,
+    ) -> Result<IncomingCheckOutcome, String> {
+        self.require_linked().await?;
+        self.ensure_connected().await?;
+        let request = payment_request_from_check_dto(dto)?;
+        let status = self
+            .wallet()
+            .check_incoming(&request)
+            .await
+            .map_err(map_wallet_error)?;
+        Ok(match status {
+            IncomingStatus::Paid => IncomingCheckOutcome::Paid,
+            IncomingStatus::Unpaid => IncomingCheckOutcome::Unpaid,
+            IncomingStatus::Unconfirmable => IncomingCheckOutcome::Unconfirmable,
+        })
+    }
+}
+
+fn settled_pay_request_dto(attempt: SettledAttempt) -> Option<SettledPayRequestDto> {
+    match attempt.attempt {
+        AttemptKey::PayRequest { event_id } => Some(SettledPayRequestDto {
+            request_event_id: event_id,
+            payment_hash: attempt.payment_hash,
+            preimage: attempt.preimage,
+            amount_msat: attempt.amount_msat,
+        }),
+        AttemptKey::Standalone => None,
+    }
+}
+
+/// Build the minimal [`PaymentRequest`] `check_incoming` needs from IPC fields.
+fn payment_request_from_check_dto(dto: CheckIncomingDto) -> Result<PaymentRequest, String> {
+    let target = match (dto.bolt11, dto.lud16) {
+        (Some(bolt11), Some(lud16)) => PaymentTarget::Both { bolt11, lud16 },
+        (Some(bolt11), None) => PaymentTarget::Bolt11(bolt11),
+        (None, Some(lud16)) => PaymentTarget::Lud16(lud16),
+        (None, None) => return Err("missing_payment_target".to_string()),
+    };
+    Ok(PaymentRequest {
+        // Amount / channel / payee are unused by check_incoming — only target matters.
+        amount: Amount::from_msat(1),
+        memo: None,
+        target,
+        channel_id: String::new(),
+        payee_pubkey: String::new(),
+        expiry: None,
+    })
 }

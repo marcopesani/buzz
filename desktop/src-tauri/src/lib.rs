@@ -894,6 +894,7 @@ pub fn run() {
             wallet_confirm,
             wallet_cancel,
             wallet_reconcile,
+            wallet_check_incoming,
             set_prevent_sleep_active,
             get_agent_memory,
             relay_reconnect_hook,

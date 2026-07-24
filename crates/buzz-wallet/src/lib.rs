@@ -31,7 +31,7 @@ pub use adapters::{
     map_nip47_error_code, parse_nwc_uri, HttpLnurlResolver, NwcWalletConnector, NwcWalletService,
     ParsedNwcUri,
 };
-pub use bolt11::payment_hash_hex;
+pub use bolt11::{decode_bolt11, payment_hash_hex, DecodedBolt11};
 pub use error::WalletError;
 pub use ports::{
     Clock, LnurlResolver, PaymentStore, ProfilePublisher, SecretStore, WalletConnector,
@@ -41,7 +41,7 @@ pub use system_clock::SystemClock;
 pub use types::{
     AttemptId, AttemptKey, Bolt11, Capabilities, ClaimOutcome, ConfirmHandle, IncomingStatus,
     InvoiceStatus, Kind0Fields, PaymentRecord, PersistedPaymentState, ReceiveMode, ResolvedPay,
-    SendOutcome, SendTarget, StoredSecret, Tx, WalletAdvertisement, WalletHandle, WalletMethod,
-    WalletTimeouts,
+    SendOutcome, SendTarget, SettledAttempt, StoredSecret, Tx, WalletAdvertisement, WalletHandle,
+    WalletMethod, WalletTimeouts,
 };
 pub use wallet::Wallet;

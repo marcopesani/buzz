@@ -27,11 +27,29 @@ export type PrepareSendQuote = {
   target_description: string | null;
 };
 
+export type ReceiveInvoice = {
+  bolt11: string;
+  payment_hash: string;
+  expires_at_unix: number;
+};
+
 export type SendConfirmOutcome =
   | { status: "settled"; preimage: string }
   | { status: "failed"; reason: string }
   | { status: "unknown" }
   | { status: "already_claimed"; state: string };
+
+export type IncomingCheckOutcome =
+  | { status: "paid" }
+  | { status: "unpaid" }
+  | { status: "unconfirmable" };
+
+export type SettledPayRequest = {
+  request_event_id: string;
+  payment_hash: string;
+  preimage: string | null;
+  amount_msat: number;
+};
 
 export type SendTargetDto =
   | { type: "lud16"; address: string }
@@ -84,8 +102,8 @@ export async function fetchWalletStatus(): Promise<WalletStatusCache> {
 export async function walletReceive(
   amountMsat: number,
   description?: string | null,
-): Promise<string> {
-  return invokeTauri<string>("wallet_receive", {
+): Promise<ReceiveInvoice> {
+  return invokeTauri<ReceiveInvoice>("wallet_receive", {
     amountMsat,
     description: description ?? null,
   });
@@ -118,7 +136,18 @@ export async function walletCancel(handleId: string): Promise<void> {
   await invokeTauri("wallet_cancel", { handleId });
 }
 
-/** Drain Paying/Unknown via lookup_invoice. */
-export async function walletReconcile(): Promise<void> {
-  await invokeTauri("wallet_reconcile");
+/** Drain Paying/Unknown via lookup_invoice; returns newly settled pay requests. */
+export async function walletReconcile(): Promise<SettledPayRequest[]> {
+  return invokeTauri<SettledPayRequest[]>("wallet_reconcile");
+}
+
+/** Confirm an incoming payment request against this wallet only. */
+export async function walletCheckIncoming(input: {
+  bolt11?: string | null;
+  lud16?: string | null;
+}): Promise<IncomingCheckOutcome> {
+  return invokeTauri<IncomingCheckOutcome>("wallet_check_incoming", {
+    bolt11: input.bolt11 ?? null,
+    lud16: input.lud16 ?? null,
+  });
 }

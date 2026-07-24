@@ -447,6 +447,16 @@ type MockBridgeOptions = {
     | { status: "failed"; reason: string }
     | { status: "unknown" }
     | { status: "already_claimed"; state: string };
+  walletCheckIncomingOutcome?:
+    | { status: "paid" }
+    | { status: "unpaid" }
+    | { status: "unconfirmable" };
+  walletReconcileSettled?: Array<{
+    request_event_id: string;
+    payment_hash: string;
+    preimage: string | null;
+    amount_msat: number;
+  }>;
   /**
    * Override the `discover_agent_models` mock response. When set, the bridge
    * returns this catalog instead of the default per-harness model list.

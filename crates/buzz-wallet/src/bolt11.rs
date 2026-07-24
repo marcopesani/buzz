@@ -56,6 +56,34 @@ pub(crate) fn validate_payable_bolt11(
     })
 }
 
+/// Fields decoded from an opaque bolt11 (no amount / expiry validation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedBolt11 {
+    /// Hex-encoded payment hash.
+    pub payment_hash_hex: String,
+    /// Unix seconds when the invoice expires.
+    pub expires_at_unix: u64,
+    /// Embedded amount in msat when the invoice is amount-bearing.
+    pub amount_msat: Option<u64>,
+}
+
+/// Decode payment hash, expiry, and optional amount from an opaque bolt11.
+///
+/// Used by receive IPC (mint-time hash + expiry for payment-request events).
+pub fn decode_bolt11(bolt11: &Bolt11) -> Result<DecodedBolt11, WalletError> {
+    let invoice =
+        Bolt11Invoice::from_str(bolt11.as_str()).map_err(|_| WalletError::ResolveRejected)?;
+    let expires_at_unix = invoice
+        .expires_at()
+        .ok_or(WalletError::ResolveRejected)?
+        .as_secs();
+    Ok(DecodedBolt11 {
+        payment_hash_hex: hex::encode(invoice.payment_hash().to_byte_array()),
+        expires_at_unix,
+        amount_msat: invoice.amount_milli_satoshis(),
+    })
+}
+
 /// Extract the payment hash from an opaque bolt11 (no amount / expiry checks).
 ///
 /// Used by [`check_incoming`](crate::Wallet::check_incoming) — the payee only

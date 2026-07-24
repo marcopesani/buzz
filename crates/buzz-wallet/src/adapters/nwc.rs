@@ -359,16 +359,19 @@ impl WalletService for NwcWalletService {
 fn invoice_status_from_lookup(
     response: &nostr::nips::nip47::LookupInvoiceResponse,
 ) -> InvoiceStatus {
+    let preimage = response
+        .preimage
+        .as_ref()
+        .filter(|p| !p.is_empty())
+        .cloned();
     match response.state {
-        Some(TransactionState::Settled) => InvoiceStatus::Settled,
+        Some(TransactionState::Settled) => InvoiceStatus::Settled { preimage },
         Some(TransactionState::Pending) => InvoiceStatus::Pending,
         Some(TransactionState::Failed) => InvoiceStatus::Failed,
         Some(TransactionState::Expired) => InvoiceStatus::Expired,
         None => {
-            if response.settled_at.is_some()
-                || response.preimage.as_ref().is_some_and(|p| !p.is_empty())
-            {
-                InvoiceStatus::Settled
+            if response.settled_at.is_some() || preimage.is_some() {
+                InvoiceStatus::Settled { preimage }
             } else {
                 InvoiceStatus::Pending
             }

@@ -24,7 +24,8 @@ pub use profile::RelayProfilePublisher;
 #[cfg(test)]
 pub use runtime::NOT_LINKED;
 pub use runtime::{
-    AttemptKeyDto, PrepareSendQuote, SendConfirmOutcome, SendTargetDto, WalletPorts, WalletRuntime,
+    AttemptKeyDto, CheckIncomingDto, IncomingCheckOutcome, PrepareSendQuote, ReceiveInvoice,
+    SendConfirmOutcome, SendTargetDto, SettledPayRequestDto, WalletPorts, WalletRuntime,
     WalletStatusView,
 };
 #[cfg(test)]
@@ -135,13 +136,16 @@ impl WalletManager {
     /// Run ensure-connected + reconcile for the active community.
     ///
     /// Safe to call when unlinked (no-op). Never returns secret material.
+    /// Newly settled pay-request DTOs are dropped here — V3 consumes them via
+    /// the explicit `wallet_reconcile` command.
     pub async fn reconcile_active(&self) -> Result<(), String> {
         let guard = self.inner.lock().await;
         let Some(session) = guard.session.as_ref() else {
             return Ok(());
         };
         session.ensure_connected().await?;
-        session.reconcile().await
+        let _settled = session.reconcile().await?;
+        Ok(())
     }
 
     /// Activate `community_id` then reconcile — used after `apply_workspace`.
@@ -200,7 +204,7 @@ impl WalletManager {
         &self,
         amount_msat: u64,
         description: Option<String>,
-    ) -> Result<String, String> {
+    ) -> Result<ReceiveInvoice, String> {
         let guard = self.inner.lock().await;
         let session = guard
             .session
@@ -247,9 +251,27 @@ impl WalletManager {
         session.cancel(&handle_id)
     }
 
-    /// Explicit reconcile command.
-    pub async fn wallet_reconcile(&self) -> Result<(), String> {
-        self.reconcile_active().await
+    /// Explicit reconcile command — returns newly settled pay-request attempts.
+    pub async fn wallet_reconcile(&self) -> Result<Vec<SettledPayRequestDto>, String> {
+        let guard = self.inner.lock().await;
+        let Some(session) = guard.session.as_ref() else {
+            return Ok(Vec::new());
+        };
+        session.ensure_connected().await?;
+        session.reconcile().await
+    }
+
+    /// Local settlement check for an incoming payment request.
+    pub async fn wallet_check_incoming(
+        &self,
+        dto: CheckIncomingDto,
+    ) -> Result<IncomingCheckOutcome, String> {
+        let guard = self.inner.lock().await;
+        let session = guard
+            .session
+            .as_ref()
+            .ok_or_else(|| "wallet_no_community".to_string())?;
+        session.check_incoming(dto).await
     }
 }
 

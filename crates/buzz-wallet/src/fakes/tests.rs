@@ -420,7 +420,7 @@ async fn payment_store_update_and_list_by_states() {
         .await
         .unwrap();
     store
-        .update_state(&id, PersistedPaymentState::Unknown)
+        .update_state(&id, PersistedPaymentState::Unknown, None)
         .await
         .unwrap();
     let listed = store
@@ -438,7 +438,10 @@ async fn payment_store_update_and_list_by_states() {
 async fn make_invoice_and_lookup_scripting() {
     let wallet = FakeWalletService::new();
     wallet.script_make_invoice(MakeInvoiceScript::Fail(WalletError::Unsupported));
-    wallet.script_lookup("deadbeef", InvoiceScript::Status(InvoiceStatus::Settled));
+    wallet.script_lookup(
+        "deadbeef",
+        InvoiceScript::Status(InvoiceStatus::Settled { preimage: None }),
+    );
     wallet.script_lookup("deadbeef", InvoiceScript::Status(InvoiceStatus::NotFound));
 
     let err = wallet
@@ -449,7 +452,7 @@ async fn make_invoice_and_lookup_scripting() {
 
     assert_eq!(
         wallet.lookup_invoice("deadbeef").await.unwrap(),
-        InvoiceStatus::Settled
+        InvoiceStatus::Settled { preimage: None }
     );
     assert_eq!(
         wallet.lookup_invoice("deadbeef").await.unwrap(),
