@@ -131,7 +131,11 @@ const overrides = new Map([
   // record_provider param + applies persona_field_with_record_fallback. +5 lines.
   // global-agent-config: spawn_agent_child loads global config and merges as
   // lowest env layer (+8 lines). Queued to split.
-  ["src-tauri/src/managed_agents/runtime.rs", 2216],
+  // +16: agent-wallet spawn observation — observe_agent_nwc_for_spawn makes a
+  // single keyring read that feeds both BUZZ_NWC_URI env injection and the
+  // spawn_config_hash wallet bit (closes the provision/spawn TOCTOU), plus
+  // the presence-matches-uri regression test. Queued to split.
+  ["src-tauri/src/managed_agents/runtime.rs", 2232],
   // config-bridge setup-payload env-boundary fix adds readiness wiring in
   // spawn_agent_child; load-bearing security fix, queued to split.
   ["src-tauri/src/managed_agents/config_bridge/reader.rs", 1016],
@@ -396,7 +400,10 @@ const overrides = new Map([
   // transition lock doc broadened to cover all protected-PID transitions, and
   // clear_agent_session_caches (per-pubkey retain) added alongside the
   // per-key clear. Load-bearing identity-contract change; queued to split.
-  ["src-tauri/src/app_state.rs", 1081],
+  // +4: agent_wallet_provision_locks map — per-agent async mutexes that
+  // serialize provision/unprovision against spawn observation. Queued to
+  // split.
+  ["src-tauri/src/app_state.rs", 1085],
   // multi-slot splitting + no-op suppression (#1309): the ReadStateManager
   // class grew from ~700 lines to ~1019 with the addition of
   // splitContextsIntoBudgetedSlots (pure fn + 5 tests), publishSplitSlots,
@@ -513,7 +520,11 @@ const overrides = new Map([
   // ownerPubkey) feeding the newly-added-mentions diff. Diff logic itself
   // lives in threading.ts (diffAddedMentionPubkeys); this is the minimal
   // composer-side wiring. Queued to split with the rest of this list.
-  ["src/features/messages/ui/MessageComposer.tsx", 1114],
+  // +17: wallet request-payment wiring — onRequestPayment prop, dialog open
+  // state + fallback handler, toolbar prop pass, RequestPaymentDialog mount.
+  // Dialog/publish logic lives in features/wallet; this is the minimal
+  // composer-side hookup. Queued to split with the rest of this list.
+  ["src/features/messages/ui/MessageComposer.tsx", 1131],
   // global-agent-config: model-tuning section (BuzzAgentModelTuningFields via
   // EditAgentAdvancedFields) + providerValid gate + effectiveProvider derivation
   // + globalProvider threading into getPersonaProviderOptions. All load-bearing
@@ -536,7 +547,12 @@ const overrides = new Map([
   // for Databricks v1 gate; prospectiveRuntimeId default fallback for builtins.
   // PR-B moves default/API-key derivation into shared hooks; the explicit
   // hidden-key projection keeps the top-level secret out of Advanced rows.
-  ["src/features/agents/ui/AgentInstanceEditDialog.tsx", 1195],
+  // +15: agent-wallet block wiring — useAgentWorking(agent.pubkey) live guard
+  // signal, needsRestart/agentRunning/onRestart props threaded to
+  // EditAgentAdvancedFields, restart CTA bound to the existing
+  // respawnManagedAgentWithRules path. Block UI lives in AgentWalletBlock.tsx;
+  // this is the minimal dialog-side hookup. Queued to split.
+  ["src/features/agents/ui/AgentInstanceEditDialog.tsx", 1210],
   // AgentDefinitionDialog grew past 1000 with the following load-bearing fixes:
   // isRuntimeAutoSeededRef tracking for edit-mode seeding (Fizz shows models);
   // runtimeSupportsLlmProviderSelection guard on discovery provider (codex fix);
