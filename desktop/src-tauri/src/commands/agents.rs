@@ -1317,77 +1317,8 @@ pub async fn delete_managed_agent(
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
-// Remote agent shutdown is handled entirely by the frontend:
-// 1. Frontend sends "!shutdown" @mention via WebSocket (signed by user's key)
-// 2. Harness sees it, exits gracefully, sets presence to "offline"
-// 3. Desktop's existing presence polling sees "offline" — UI updates automatically
-// No backend Tauri command needed. Presence IS the status.
-
-/// Provision a receive-only NWC wallet for a managed agent.
-///
-/// Probes capabilities via NWC; refuses (and stores nothing) if any spend
-/// method is advertised on either info surface, or if `make_invoice` /
-/// `lookup_invoice` are missing. On success stores the URI at
-/// `agent-nwc:{pubkey}` in the keyring — never in `managed-agents.json`.
-#[tauri::command]
-pub async fn provision_managed_agent_wallet(
-    pubkey: String,
-    uri: String,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let pubkey = pubkey.trim().to_string();
-    if pubkey.is_empty() {
-        return Err("agent pubkey is required".to_string());
-    }
-    let uri = uri.trim().to_string();
-    if uri.is_empty() {
-        return Err("nwc uri is required".to_string());
-    }
-
-    // Confirm the agent exists before probing/storing.
-    {
-        let _store_guard = state
-            .managed_agents_store_lock
-            .lock()
-            .map_err(|error| error.to_string())?;
-        let records = load_managed_agents(&app)?;
-        if !records.iter().any(|r| r.pubkey == pubkey) {
-            return Err(format!("agent {pubkey} not found"));
-        }
-    }
-
-    let connector = buzz_wallet_pkg::NwcWalletConnector::new(crate::wallet::agent_nwc_timeouts());
-    let backend = crate::wallet::agent_nwc_os_backend();
-    crate::wallet::provision_agent_nwc(&pubkey, &uri, &connector, &backend)
-        .await
-        .map(|_| ())
-}
-
-/// Remove a managed agent's NWC URI from the keyring.
-#[tauri::command]
-pub async fn unprovision_managed_agent_wallet(
-    pubkey: String,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let pubkey = pubkey.trim().to_string();
-    if pubkey.is_empty() {
-        return Err("agent pubkey is required".to_string());
-    }
-    {
-        let _store_guard = state
-            .managed_agents_store_lock
-            .lock()
-            .map_err(|error| error.to_string())?;
-        let records = load_managed_agents(&app)?;
-        if !records.iter().any(|r| r.pubkey == pubkey) {
-            return Err(format!("agent {pubkey} not found"));
-        }
-    }
-    let backend = crate::wallet::agent_nwc_os_backend();
-    crate::wallet::unprovision_agent_nwc(&pubkey, &backend)
-}
+// Remote agent shutdown is frontend-only (!shutdown @mention → harness exit →
+// presence offline). Agent NWC provision/unprovision: `agent_wallet.rs`.
 
 #[path = "agents_deploy.rs"]
 mod deploy;
