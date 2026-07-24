@@ -274,18 +274,18 @@ fn redact_secrets(s: &str) -> String {
     redact_secrets_with(s, &[])
 }
 
-/// Like the (test-only) prefix-only `redact_secrets`, but also redacts
-/// every occurrence of each
-/// `extras` entry verbatim. Used to scrub user-supplied env values out of
-/// provider stderr/JSON-error text — providers may echo their request
-/// back in failure messages, and persona/agent `env_vars` may carry API
-/// keys that the desktop just persisted via `last_error`.
+/// Redact secrets from log / error text.
+///
+/// Scrubs every `extras` entry verbatim (longest first; entries shorter than
+/// 4 chars skipped), then prefix-matches `nsec1`, `sprt_tok_`, and
+/// `nostr+walletconnect://`. Used by provider deploy stderr **and** the
+/// agent-log read-tail path — one function, both surfaces.
 ///
 /// Entries shorter than 4 chars are skipped: too noisy to scrub blindly
 /// (would match every short token in normal log output). Entries are
 /// applied in decreasing length order so superstrings get scrubbed before
 /// substrings — protects against partial overlap leaks.
-fn redact_secrets_with(s: &str, extras: &[&str]) -> String {
+pub(crate) fn redact_secrets_with(s: &str, extras: &[&str]) -> String {
     let mut result = s.to_string();
 
     // Extras: longest first to avoid partial-overlap leaks. We use
@@ -304,9 +304,9 @@ fn redact_secrets_with(s: &str, extras: &[&str]) -> String {
 
     // Then prefix-based scrubbing. This loop *can* re-scan because each
     // replacement shortens the buffer past the matched prefix — the
-    // replacement marker `[REDACTED]` does not contain `nsec1` or
-    // `sprt_tok_`, so progress is guaranteed.
-    for prefix in &["nsec1", "sprt_tok_"] {
+    // replacement marker `[REDACTED]` does not contain any of these
+    // prefixes, so progress is guaranteed.
+    for prefix in &["nsec1", "sprt_tok_", "nostr+walletconnect://"] {
         while let Some(pos) = result.find(prefix) {
             let end = result[pos..]
                 .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
@@ -540,6 +540,25 @@ mod tests {
         let r = redact_secrets(s);
         assert!(r.contains("[REDACTED]"));
         assert!(!r.contains("sprt_tok_xyz789"));
+    }
+
+    #[test]
+    fn redact_secrets_replaces_nwc_uri_prefix() {
+        let uri = "nostr+walletconnect://pk?relay=wss://r.example&secret=deadbeefcafebabe";
+        let s = format!("connected with {uri} ok");
+        let r = redact_secrets(&s);
+        assert!(r.contains("[REDACTED]"));
+        assert!(!r.contains("nostr+walletconnect"));
+        assert!(!r.contains("deadbeefcafebabe"));
+    }
+
+    #[test]
+    fn redact_secrets_with_extras_scrubs_bare_nwc_secret() {
+        let secret = "deadbeefcafebabe0123456789abcdef";
+        let s = format!("leaked secret hex={secret} in log");
+        let r = redact_secrets_with(&s, &[secret]);
+        assert!(r.contains("[REDACTED]"));
+        assert!(!r.contains(secret));
     }
 
     #[test]

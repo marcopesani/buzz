@@ -4079,6 +4079,16 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                     });
                 }
             }
+            // Forward receive-only NWC URI so agent `buzz wallet` CLI
+            // invocations via MCP inherit the provisioned connection.
+            if let Ok(nwc_uri) = std::env::var("BUZZ_NWC_URI") {
+                if !nwc_uri.is_empty() {
+                    env.push(EnvVar {
+                        name: "BUZZ_NWC_URI".into(),
+                        value: nwc_uri,
+                    });
+                }
+            }
             env
         },
     }]
@@ -4699,6 +4709,36 @@ mod build_mcp_servers_tests {
         let server = &servers[0];
         let has_auth_tag = server.env.iter().any(|e| e.name == "BUZZ_AUTH_TAG");
         assert!(!has_auth_tag, "empty BUZZ_AUTH_TAG should not be forwarded");
+    }
+
+    #[test]
+    fn session_new_mcp_server_forwards_buzz_nwc_uri() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var(
+            "BUZZ_NWC_URI",
+            "nostr+walletconnect://pk?relay=wss://r.example&secret=abcd",
+        );
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("BUZZ_NWC_URI");
+
+        let server = &servers[0];
+        let nwc = server.env.iter().find(|e| e.name == "BUZZ_NWC_URI");
+        assert!(nwc.is_some(), "BUZZ_NWC_URI should be forwarded when set");
+        assert!(nwc.unwrap().value.starts_with("nostr+walletconnect://"));
+    }
+
+    #[test]
+    fn session_new_mcp_server_skips_empty_buzz_nwc_uri() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("BUZZ_NWC_URI", "");
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("BUZZ_NWC_URI");
+
+        let server = &servers[0];
+        let has_nwc = server.env.iter().any(|e| e.name == "BUZZ_NWC_URI");
+        assert!(!has_nwc, "empty BUZZ_NWC_URI should not be forwarded");
     }
 
     #[test]

@@ -40,6 +40,7 @@ pub use system_clock::SystemClock;
 pub use types::{
     AttemptId, AttemptKey, Bolt11, Capabilities, ClaimOutcome, ConfirmHandle, IncomingStatus,
     InvoiceStatus, Kind0Fields, PaymentRecord, PersistedPaymentState, ReceiveMode, ResolvedPay,
-    SendOutcome, SendTarget, StoredSecret, Tx, WalletHandle, WalletMethod, WalletTimeouts,
+    SendOutcome, SendTarget, StoredSecret, Tx, WalletAdvertisement, WalletHandle, WalletMethod,
+    WalletTimeouts,
 };
 pub use wallet::Wallet;

@@ -29,7 +29,7 @@ mod secret_store;
 mod shutdown;
 mod templates;
 mod util;
-mod wallet;
+pub mod wallet;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use builderlab::*;
 use commands::*;
@@ -786,6 +786,8 @@ pub fn run() {
             reconcile_managed_agent_runtimes,
             put_managed_agent_runtime_lifecycle,
             create_managed_agent,
+            provision_managed_agent_wallet,
+            unprovision_managed_agent_wallet,
             start_managed_agent,
             stop_managed_agent,
             set_agent_managed_profiles,

@@ -232,6 +232,13 @@ impl Capabilities {
         }
     }
 
+    /// Union of two capability sets (`self ∪ other`).
+    pub fn union(&self, other: &Self) -> Self {
+        Self {
+            methods: self.methods.union(&other.methods).copied().collect(),
+        }
+    }
+
     /// Link-time advertisement: `13194 ∩ get_info.methods`.
     ///
     /// Unknown strings in either list are ignored before the intersect.
@@ -240,6 +247,17 @@ impl Capabilities {
         get_info_methods: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Self {
         Self::parse(info_13194).intersect(&Self::parse(get_info_methods))
+    }
+
+    /// Raw advertisements from both NWC info surfaces (before intersect).
+    pub fn from_advertisement_pair(
+        info_13194: impl IntoIterator<Item = impl AsRef<str>>,
+        get_info_methods: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> WalletAdvertisement {
+        WalletAdvertisement {
+            methods_13194: Self::parse(info_13194),
+            get_info_methods: Self::parse(get_info_methods),
+        }
     }
 
     /// Whether the given method is present.
@@ -260,6 +278,30 @@ impl Capabilities {
     /// True when no methods are advertised.
     pub fn is_empty(&self) -> bool {
         self.methods.is_empty()
+    }
+}
+
+/// Raw capability advertisements from both NWC info surfaces.
+///
+/// Link uses the intersection; agent receive-only provisioning refuses spend
+/// methods advertised on *either* surface (union).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletAdvertisement {
+    /// Methods from the kind-13194 info event.
+    pub methods_13194: Capabilities,
+    /// Methods from `get_info`.
+    pub get_info_methods: Capabilities,
+}
+
+impl WalletAdvertisement {
+    /// `13194 ∩ get_info` — methods actually available on the connection.
+    pub fn intersection(&self) -> Capabilities {
+        self.methods_13194.intersect(&self.get_info_methods)
+    }
+
+    /// `13194 ∪ get_info` — anything either surface advertises.
+    pub fn union(&self) -> Capabilities {
+        self.methods_13194.union(&self.get_info_methods)
     }
 }
 

@@ -746,8 +746,18 @@ pub struct AgentLogError {
     pub code: Option<i64>,
 }
 
-pub fn meaningful_agent_error_from_log(path: &Path) -> Option<AgentLogError> {
-    let tail = read_log_tail(path, 200).ok()?;
+/// Extract a displayable agent error from a log tail, redacting secrets first.
+///
+/// `extras` are exact substrings to scrub (longest-first) via the shared
+/// [`super::redact_secrets_with`] — typically the agent's provisioned NWC URI
+/// and bare `secret=` value from [`crate::wallet::agent_nwc_redaction_extras`].
+/// Callers that have the agent pubkey (e.g. runtime sync) must load those
+/// extras and pass them in; this function does not touch the keyring.
+pub fn meaningful_agent_error_from_log(path: &Path, extras: &[&str]) -> Option<AgentLogError> {
+    let raw = read_log_tail(path, 200).ok()?;
+    // Same redaction as the log-read UI path — never surface nsec / NWC URIs
+    // (or bare NWC secrets) via last_error → managed-agents.json / frontend.
+    let tail = super::redact_secrets_with(&raw, extras);
     tail.lines().rev().map(str::trim).find_map(|line| {
         // New format: "Agent reported error (code -32002): ..."
         if let Some(rest) = line.strip_prefix("Agent reported error (code ") {
@@ -1132,7 +1142,7 @@ mod tests {
         let file = write_log(
             "noise\nAgent reported error (code -32001): llm auth: 401 unauthorized: ...\n",
         );
-        let result = super::meaningful_agent_error_from_log(file.path()).unwrap();
+        let result = super::meaningful_agent_error_from_log(file.path(), &[]).unwrap();
         assert!(result.message.contains("llm auth"));
         assert_eq!(result.code, Some(-32001));
     }
@@ -1140,7 +1150,7 @@ mod tests {
     #[test]
     fn meaningful_agent_error_from_log_promotes_unwrapped_llm_auth() {
         let file = write_log("noise\nllm auth: denied\n");
-        let result = super::meaningful_agent_error_from_log(file.path()).unwrap();
+        let result = super::meaningful_agent_error_from_log(file.path(), &[]).unwrap();
         assert_eq!(result.message, "Agent reported error: llm auth: denied");
         assert_eq!(result.code, Some(-32001));
     }
@@ -1148,7 +1158,7 @@ mod tests {
     #[test]
     fn meaningful_agent_error_from_log_promotes_bare_model_not_found() {
         let file = write_log("noise\nllm model not found: (some-model) 404\n");
-        let result = super::meaningful_agent_error_from_log(file.path()).unwrap();
+        let result = super::meaningful_agent_error_from_log(file.path(), &[]).unwrap();
         assert_eq!(
             result.message,
             "Agent reported error: llm model not found: (some-model) 404"
@@ -1159,7 +1169,7 @@ mod tests {
     #[test]
     fn meaningful_agent_error_from_log_promotes_legacy_format() {
         let file = write_log("noise\nAgent reported error: llm: 500 internal\n");
-        let result = super::meaningful_agent_error_from_log(file.path()).unwrap();
+        let result = super::meaningful_agent_error_from_log(file.path(), &[]).unwrap();
         assert_eq!(result.message, "Agent reported error: llm: 500 internal");
         assert_eq!(result.code, None);
     }
@@ -1167,7 +1177,27 @@ mod tests {
     #[test]
     fn meaningful_agent_error_from_log_does_not_promote_midline_auth_text() {
         let file = write_log("noise before llm auth: denied\n");
-        assert!(super::meaningful_agent_error_from_log(file.path()).is_none());
+        assert!(super::meaningful_agent_error_from_log(file.path(), &[]).is_none());
+    }
+
+    /// Regression: a bare NWC secret hex in the log must not reach `last_error`
+    /// (which is persisted to managed-agents.json). Callers pass keyring-derived
+    /// extras — empty extras would leave the bare secret intact after prefix scrub.
+    #[test]
+    fn meaningful_agent_error_from_log_redacts_bare_nwc_secret_via_extras() {
+        let secret = "deadbeefcafebabe0123456789abcdef";
+        let file = write_log(&format!(
+            "noise\nAgent reported error (code -32000): leaked secret={secret}\n"
+        ));
+        let result =
+            super::meaningful_agent_error_from_log(file.path(), &[secret]).expect("promoted");
+        assert!(
+            !result.message.contains(secret),
+            "bare secret leaked into last_error message: {}",
+            result.message
+        );
+        assert!(result.message.contains("[REDACTED]"));
+        assert_eq!(result.code, Some(-32000));
     }
 
     #[test]

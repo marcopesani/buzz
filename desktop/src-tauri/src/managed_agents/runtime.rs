@@ -1274,13 +1274,16 @@ pub fn sync_managed_agent_processes(
             let log_err = if status.success() {
                 None
             } else {
+                // Load NWC redaction extras here (we have the pubkey); storage
+                // stays keyring-free and uses the shared redact_secrets_with.
+                let nwc_extras = crate::wallet::agent_nwc_redaction_extras_for_pubkey(&key.pubkey);
+                let nwc_refs: Vec<&str> = nwc_extras.iter().map(String::as_str).collect();
                 Some(
-                    super::meaningful_agent_error_from_log(&runtime.log_path).unwrap_or_else(
-                        || super::storage::AgentLogError {
+                    super::meaningful_agent_error_from_log(&runtime.log_path, &nwc_refs)
+                        .unwrap_or_else(|| super::storage::AgentLogError {
                             message: format!("harness exited with status {status}"),
                             code: None,
-                        },
-                    ),
+                        }),
                 )
             };
             record.last_error = log_err.as_ref().map(|e| e.message.clone());
@@ -1905,6 +1908,18 @@ pub fn spawn_agent_child(
         command.env("BUZZ_AUTH_TAG", auth_tag);
     } else {
         command.env_remove("BUZZ_AUTH_TAG");
+    }
+
+    // Receive-only NWC URI from keyring (`agent-nwc:{pubkey}`). Reserved —
+    // user env cannot override. Absent when unprovisioned (clear inherited).
+    match crate::wallet::agent_nwc_spawn_uri(&record.pubkey, &crate::wallet::agent_nwc_os_backend())
+    {
+        Some(nwc_uri) => {
+            command.env("BUZZ_NWC_URI", nwc_uri);
+        }
+        None => {
+            command.env_remove("BUZZ_NWC_URI");
+        }
     }
 
     // Inbound author gate: who is this agent allowed to respond to?

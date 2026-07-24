@@ -5,12 +5,19 @@
 //! Commands in [`crate::commands::wallet`] are a thin IPC skin over this
 //! module; payment decisions stay in `buzz-wallet`.
 
+mod agent_nwc;
 mod error;
 mod payment_store;
 mod profile;
 mod runtime;
 mod secret_store;
 
+pub use agent_nwc::{
+    agent_nwc_blob_key, agent_nwc_os_backend, agent_nwc_redaction_extras,
+    agent_nwc_redaction_extras_for_pubkey, agent_nwc_spawn_uri, agent_nwc_timeouts,
+    load_agent_nwc_uri, provision_agent_nwc, unprovision_agent_nwc, validate_agent_receive_only,
+    AdvertisementProbe, AGENT_SPEND_METHODS,
+};
 pub use error::map_wallet_error;
 pub use payment_store::JsonPaymentStore;
 pub use profile::RelayProfilePublisher;
@@ -20,9 +27,10 @@ pub use runtime::{
     AttemptKeyDto, PrepareSendQuote, SendConfirmOutcome, SendTargetDto, WalletPorts, WalletRuntime,
     WalletStatusView,
 };
-pub use secret_store::KeyringNwcSecretStore;
 #[cfg(test)]
-pub use secret_store::{nwc_blob_key, BlobBackend, MapBlobBackend};
+pub use secret_store::nwc_blob_key;
+pub use secret_store::{BlobBackend, KeyringNwcSecretStore, MapBlobBackend};
+pub use secret_store::{BlobBackend as WalletBlobBackend, OsBlobBackend};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,7 +39,6 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 
 use buzz_wallet_pkg::{HttpLnurlResolver, NwcWalletConnector, SystemClock, WalletTimeouts};
-use secret_store::OsBlobBackend;
 
 /// Default RPC timeouts for the production NWC connector.
 fn production_timeouts() -> WalletTimeouts {

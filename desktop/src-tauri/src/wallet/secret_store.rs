@@ -7,9 +7,7 @@
 use async_trait::async_trait;
 use buzz_wallet_pkg::{Capabilities, SecretStore, StoredSecret, WalletError, WalletMethod};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
 use std::collections::HashMap;
-#[cfg(test)]
 use std::sync::Mutex;
 
 /// Keyring blob key for a community's NWC secret.
@@ -17,7 +15,8 @@ pub fn nwc_blob_key(community_id: &str) -> String {
     format!("nwc:{community_id}")
 }
 
-/// Minimal get/set/delete surface so tests can inject a map without the OS keyring.
+/// Minimal get/set/delete surface so tests (and agent-NWC helpers) can inject
+/// a map without the OS keyring.
 pub trait BlobBackend: Send + Sync {
     /// Load a blob value by key.
     fn load(&self, key: &str) -> Result<Option<String>, String>;
@@ -44,14 +43,12 @@ impl BlobBackend for OsBlobBackend {
     }
 }
 
-/// In-memory blob backend for unit tests (records exact keys).
-#[cfg(test)]
+/// In-memory blob backend for unit tests and the wallet E2E harness.
 #[derive(Debug, Default)]
 pub struct MapBlobBackend {
     map: Mutex<HashMap<String, String>>,
 }
 
-#[cfg(test)]
 impl MapBlobBackend {
     /// Empty map backend.
     pub fn new() -> Self {
@@ -78,7 +75,6 @@ impl MapBlobBackend {
     }
 }
 
-#[cfg(test)]
 impl BlobBackend for MapBlobBackend {
     fn load(&self, key: &str) -> Result<Option<String>, String> {
         Ok(self

@@ -7,7 +7,7 @@
 
 use crate::error::WalletError;
 use crate::ports::{WalletConnector, WalletService};
-use crate::types::{Bolt11, Capabilities, InvoiceStatus, Tx, WalletTimeouts};
+use crate::types::{Bolt11, Capabilities, InvoiceStatus, Tx, WalletAdvertisement, WalletTimeouts};
 use async_trait::async_trait;
 use buzz_core::payment::Amount;
 use nostr::nips::nip47::{
@@ -125,6 +125,32 @@ impl NwcWalletConnector {
     pub fn new(timeouts: WalletTimeouts) -> Self {
         Self { timeouts }
     }
+
+    /// Probe both NWC info surfaces without retaining a live wallet service.
+    ///
+    /// Returns raw advertisements (`13194` and `get_info`) plus optional
+    /// `lud16` from the URI. Used by agent receive-only provisioning, which
+    /// refuses spend methods on the **union** of the two surfaces.
+    pub async fn probe_advertisement(
+        &self,
+        uri: &str,
+    ) -> Result<(WalletAdvertisement, Option<String>), WalletError> {
+        let parsed = parse_nwc_uri(uri)?;
+        let lud16 = parsed.uri.lud16.clone();
+        let opts = NostrWalletConnectOptions::new().timeout(self.timeouts.connect);
+        let client = NWC::with_opts(parsed.uri.clone(), opts);
+
+        match timeout(
+            self.timeouts.connect,
+            fetch_advertisement(&client, &parsed, self.timeouts.connect),
+        )
+        .await
+        {
+            Ok(Ok(ads)) => Ok((ads, lud16)),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(WalletError::Unreachable),
+        }
+    }
 }
 
 #[async_trait]
@@ -140,14 +166,14 @@ impl WalletConnector for NwcWalletConnector {
 
         match timeout(
             self.timeouts.connect,
-            probe_capabilities(&client, &parsed, self.timeouts.connect),
+            fetch_advertisement(&client, &parsed, self.timeouts.connect),
         )
         .await
         {
-            Ok(Ok(capabilities)) => {
+            Ok(Ok(ads)) => {
                 let service: Arc<dyn WalletService> =
                     Arc::new(NwcWalletService::new(client, self.timeouts));
-                Ok((service, capabilities, lud16))
+                Ok((service, ads.intersection(), lud16))
             }
             Ok(Err(err)) => Err(err),
             Err(_) => Err(WalletError::Unreachable),
@@ -155,12 +181,12 @@ impl WalletConnector for NwcWalletConnector {
     }
 }
 
-/// Fetch `13194 ∩ get_info.methods`.
-async fn probe_capabilities(
+/// Fetch raw `13194` and `get_info` method lists.
+async fn fetch_advertisement(
     client: &NWC,
     parsed: &ParsedNwcUri,
     connect_timeout: Duration,
-) -> Result<Capabilities, WalletError> {
+) -> Result<WalletAdvertisement, WalletError> {
     let info_13194 = fetch_methods_13194(parsed, connect_timeout).await?;
     let info = client.get_info().await.map_err(map_query_error)?;
     let get_info_methods: Vec<String> = info
@@ -168,7 +194,7 @@ async fn probe_capabilities(
         .iter()
         .map(|m| m.as_str().to_string())
         .collect();
-    Ok(Capabilities::from_link_advertisement(
+    Ok(Capabilities::from_advertisement_pair(
         info_13194,
         get_info_methods,
     ))
