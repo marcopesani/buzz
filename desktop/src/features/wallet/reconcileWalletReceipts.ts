@@ -19,6 +19,7 @@ import {
   paymentRequestByIdFilter,
   type PublishPaymentReceiptDeps,
 } from "./publishPaymentReceipt";
+import { verifyAllPendingPaymentRequests } from "./verifyPendingPaymentRequest";
 import { walletReconcile, type SettledPayRequest } from "./walletApi";
 
 /** Serialize enqueue/flush so confirm + reconcile never interleave writes. */
@@ -138,6 +139,16 @@ export async function reconcileAndFlushReceipts(): Promise<
     );
     setReceiptOutboxState(next);
   });
+
+  // Poll backstop for MY pending 40009s — same cadence, no new timer.
+  try {
+    await verifyAllPendingPaymentRequests();
+  } catch (err) {
+    console.warn(
+      "[wallet-payment-events] verify pending failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   return settled;
 }

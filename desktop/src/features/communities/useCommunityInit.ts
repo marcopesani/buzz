@@ -29,6 +29,14 @@ import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useS
 import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
 import {
+  ensurePaymentEventsToast,
+  resetPaymentEventsToast,
+} from "@/features/wallet/paymentEventsToast";
+import {
+  initPendingPaymentRequests,
+  resetPendingPaymentRequests,
+} from "@/features/wallet/pendingPaymentRequestsStore";
+import {
   initReceiptOutbox,
   resetReceiptOutbox,
 } from "@/features/wallet/receiptOutboxStore";
@@ -70,6 +78,8 @@ function resetCommunityState({
   clearMarkdownNodeCache();
   resetWalletState();
   resetReceiptOutbox();
+  resetPendingPaymentRequests();
+  resetPaymentEventsToast();
 }
 
 type CommunityInitResult =
@@ -264,6 +274,8 @@ export function useCommunityInit(
           );
         }
         initReceiptOutbox(activeCommunity.id);
+        initPendingPaymentRequests(activeCommunity.id);
+        ensurePaymentEventsToast();
         // Restore any turn state saved for this community (a prior A→B round-
         // trip). This runs after applyCommunity succeeds and before the app
         // renders so components see the restored timers on first render.

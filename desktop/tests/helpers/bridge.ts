@@ -466,7 +466,10 @@ type MockBridgeOptions = {
   walletCheckIncomingOutcome?:
     | { status: "paid" }
     | { status: "unpaid" }
-    | { status: "unconfirmable" };
+    | { status: "unconfirmable" }
+    | Array<
+        { status: "paid" } | { status: "unpaid" } | { status: "unconfirmable" }
+      >;
   walletReconcileSettled?: Array<{
     request_event_id: string;
     payment_hash: string;

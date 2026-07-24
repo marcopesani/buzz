@@ -31,6 +31,7 @@ import {
   clearTimeoutState,
   recordTimeoutFromRejection,
 } from "@/features/moderation/lib/timeoutStore";
+import { observePaymentReceiptForVerification } from "@/features/wallet/verifyPendingPaymentRequest";
 import { relayClient, setVisibleChannel } from "@/shared/api/relayClient";
 import { customEmojiQueryKey } from "@/features/custom-emoji/hooks";
 import { channelsQueryKey } from "@/features/channels/hooks";
@@ -64,6 +65,7 @@ import {
   CHANNEL_AUX_EVENT_KINDS,
   CHANNEL_TIMELINE_CONTENT_KINDS,
   KIND_CHANNEL_THREAD_SUMMARY,
+  KIND_PAYMENT_RECEIPT,
   KIND_STREAM_MESSAGE,
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
@@ -296,6 +298,11 @@ export function useChannelSubscription(channel: Channel | null) {
         { queryKey: ["thread-replies", channelId] },
         (current = []) => mergeMessages(current, event),
       );
+    }
+
+    // Receipt nudge for MY pending 40009s — verify path only; never flips Paid.
+    if (event.kind === KIND_PAYMENT_RECEIPT) {
+      observePaymentReceiptForVerification(event);
     }
 
     const windowKey = channelWindowKey(channelId);

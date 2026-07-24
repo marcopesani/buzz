@@ -98,9 +98,11 @@ describe("executeRequestPaymentSubmit", () => {
       },
       publishEvent: async () => {
         order.push("publish");
+        return { eventId: "aa".repeat(32) };
       },
     });
     assert.equal(result.ok, true);
+    assert.equal(result.requestEventId, "aa".repeat(32));
     assert.deepEqual(order, ["prepare", "mint", "publish"]);
   });
 
@@ -146,9 +148,11 @@ describe("executeRequestPaymentSubmit", () => {
       },
       publishEvent: async ({ tags }) => {
         published.push(tags.find((t) => t[0] === "bolt11")?.[1]);
+        return { eventId: "bb".repeat(32) };
       },
     });
     assert.equal(second.ok, true);
+    assert.equal(second.requestEventId, "bb".repeat(32));
     assert.equal(mintCalls, 1);
     assert.deepEqual(published, [INVOICE.bolt11]);
   });
@@ -187,7 +191,7 @@ describe("executeRequestPaymentSubmit", () => {
       existingInvoice: null,
       existingChannelId: null,
       mintInvoice: async () => INVOICE,
-      publishEvent: async () => {},
+      publishEvent: async () => ({ eventId: "cc".repeat(32) }),
     });
     assert.equal(result.ok, true);
     assert.equal(result.clamped, true);

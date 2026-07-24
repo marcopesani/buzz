@@ -30,7 +30,7 @@ export type ExecuteRequestPaymentSubmitDeps = {
     kind: number;
     content: string;
     tags: string[][];
-  }) => Promise<void>;
+  }) => Promise<{ eventId: string }>;
 };
 
 export type ExecuteRequestPaymentSubmitResult =
@@ -38,6 +38,7 @@ export type ExecuteRequestPaymentSubmitResult =
       ok: true;
       invoice: MintedInvoice;
       channelId: string;
+      requestEventId: string;
       expiryUnix: number;
       clamped: boolean;
       tags: string[][];
@@ -187,8 +188,9 @@ export async function executeRequestPaymentSubmit(
     };
   }
 
+  let published: { eventId: string };
   try {
-    await deps.publishEvent({
+    published = await deps.publishEvent({
       channelId,
       kind: built.kind,
       content: built.content,
@@ -211,6 +213,7 @@ export async function executeRequestPaymentSubmit(
     ok: true,
     invoice,
     channelId,
+    requestEventId: published.eventId,
     expiryUnix,
     clamped,
     tags: built.tags,

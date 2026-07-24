@@ -24,6 +24,7 @@ import {
   type MintedInvoice,
   type RequestSubmitPhase,
 } from "./requestSubmitMachine";
+import { registerPublishedPaymentRequest } from "./verifyPendingPaymentRequest";
 import { walletReceive } from "./walletApi";
 
 export type RequestPaymentDialogProps = {
@@ -173,12 +174,22 @@ export function RequestPaymentDialog({
             "Timed out while publishing the payment request.",
             "Failed to publish the payment request.",
           );
+          return { eventId: event.id };
         },
       });
 
       if (result.ok) {
         stickyInvoiceRef.current = result.invoice;
         stickyChannelIdRef.current = result.channelId;
+        registerPublishedPaymentRequest({
+          requestEventId: result.requestEventId,
+          channelId: result.channelId,
+          amountMsat,
+          bolt11: result.invoice.bolt11,
+          paymentHash: result.invoice.payment_hash,
+          createdAtUnix: Math.floor(Date.now() / 1000),
+          expiryUnix: result.expiryUnix,
+        });
         setPhase((prev) => reduceRequestSubmit(prev, { type: "published" }));
         toast.success("Payment request posted");
         if (result.clamped) {

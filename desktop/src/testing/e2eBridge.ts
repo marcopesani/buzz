@@ -439,11 +439,19 @@ type E2eConfig = {
       | { status: "failed"; reason: string }
       | { status: "unknown" }
       | { status: "already_claimed"; state: string };
-    /** Incoming check outcome for wallet_check_incoming (default unpaid). */
+    /**
+     * Incoming check outcome for wallet_check_incoming (default unpaid).
+     * Pass an array to script successive calls (queue; last entry sticks).
+     */
     walletCheckIncomingOutcome?:
       | { status: "paid" }
       | { status: "unpaid" }
-      | { status: "unconfirmable" };
+      | { status: "unconfirmable" }
+      | Array<
+          | { status: "paid" }
+          | { status: "unpaid" }
+          | { status: "unconfirmable" }
+        >;
     /** Settled pay-request rows returned by wallet_reconcile (default []). */
     walletReconcileSettled?: Array<{
       request_event_id: string;
@@ -1149,6 +1157,13 @@ declare global {
       provisionError?: string | null;
       stickyProvisionError?: boolean;
     }) => void;
+    /** Mid-test override for wallet_check_incoming (single sticky outcome). */
+    __BUZZ_E2E_SET_WALLET_CHECK_INCOMING__?: (
+      outcome:
+        | { status: "paid" }
+        | { status: "unpaid" }
+        | { status: "unconfirmable" },
+    ) => void;
     __BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_SET_MESH__?: (mesh: {
@@ -2916,6 +2931,10 @@ const mockWalletState: {
     | { status: "paid" }
     | { status: "unpaid" }
     | { status: "unconfirmable" };
+  /** When non-empty, each wallet_check_incoming shifts one outcome. */
+  checkIncomingQueue: Array<
+    { status: "paid" } | { status: "unpaid" } | { status: "unconfirmable" }
+  >;
   reconcileSettled: Array<{
     request_event_id: string;
     payment_hash: string;
@@ -2948,6 +2967,7 @@ const mockWalletState: {
     preimage: "ab".repeat(32),
   },
   checkIncomingOutcome: { status: "unpaid" },
+  checkIncomingQueue: [],
   reconcileSettled: [],
   handles: new Map(),
 };
@@ -2984,8 +3004,16 @@ function resetMockWallet(config: E2eConfig | undefined) {
     status: "settled",
     preimage: "ab".repeat(32),
   };
-  mockWalletState.checkIncomingOutcome = config?.mock
-    ?.walletCheckIncomingOutcome ?? { status: "unpaid" };
+  const checkSeed = config?.mock?.walletCheckIncomingOutcome;
+  if (Array.isArray(checkSeed)) {
+    mockWalletState.checkIncomingQueue = [...checkSeed];
+    mockWalletState.checkIncomingOutcome = checkSeed[checkSeed.length - 1] ?? {
+      status: "unpaid",
+    };
+  } else {
+    mockWalletState.checkIncomingQueue = [];
+    mockWalletState.checkIncomingOutcome = checkSeed ?? { status: "unpaid" };
+  }
   mockWalletState.reconcileSettled = config?.mock?.walletReconcileSettled ?? [];
   mockWalletState.handles.clear();
 }
@@ -5248,6 +5276,7 @@ function filterMockProjectEvents(filter: MockFilter): RelayEvent[] {
     .slice(0, filter.limit ?? 500);
 }
 
+/** Nostr event ids are 32-byte hex (64 chars). UUID-without-dashes is only 32. */
 function mockEventId(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -5260,7 +5289,7 @@ function createMockEvent(
   tags: string[][],
   pubkey = DEFAULT_MOCK_IDENTITY.pubkey,
   createdAt = Math.floor(Date.now() / 1000),
-  id = crypto.randomUUID().replace(/-/g, ""),
+  id = mockEventId(),
 ): RelayEvent {
   return {
     id,
@@ -9221,6 +9250,10 @@ export function maybeInstallE2eTauriMocks() {
       mockAgentWalletState.stickyProvisionError = next.stickyProvisionError;
     }
   };
+  window.__BUZZ_E2E_SET_WALLET_CHECK_INCOMING__ = (outcome) => {
+    mockWalletState.checkIncomingQueue = [];
+    mockWalletState.checkIncomingOutcome = outcome;
+  };
   window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
@@ -11283,6 +11316,11 @@ export function maybeInstallE2eTauriMocks() {
       case "wallet_check_incoming": {
         if (!mockWalletState.status.linked) {
           throw new Error("not_linked");
+        }
+        const queued = mockWalletState.checkIncomingQueue.shift();
+        if (queued) {
+          mockWalletState.checkIncomingOutcome = queued;
+          return { ...queued };
         }
         return { ...mockWalletState.checkIncomingOutcome };
       }
