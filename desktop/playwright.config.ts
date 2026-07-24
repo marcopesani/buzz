@@ -110,6 +110,7 @@ export default defineConfig({
         "**/agent-wallet-modal.spec.ts",
         "**/wallet-live-fullscreen.spec.ts",
         "**/wallet-real-money.spec.ts",
+        "**/wallet-real-money-phase2.spec.ts",
         "**/global-agent-config-screenshots.spec.ts",
         "**/doctor-states.spec.ts",
         "**/onboarding-avatar-skip.spec.ts",
