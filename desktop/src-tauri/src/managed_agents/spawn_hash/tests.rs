@@ -85,8 +85,22 @@ fn persona(id: &str, runtime: Option<&str>, prompt: &str) -> AgentDefinition {
 fn hash_is_deterministic() {
     let rec = record();
     assert_eq!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -112,14 +126,16 @@ fn materializing_runtime_keeps_hash_stable() {
             &personas,
             &[],
             "wss://ws.example",
-            &Default::default()
+            &Default::default(),
+            false
         ),
         spawn_config_hash(
             &post,
             &personas,
             &[],
             "wss://ws.example",
-            &Default::default()
+            &Default::default(),
+            false
         )
     );
 }
@@ -132,8 +148,22 @@ fn record_env_var_edit_changes_hash() {
         .env_vars
         .insert("SOME_KEY".into(), "some-value".into());
     assert_ne!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -143,8 +173,22 @@ fn record_prompt_edit_changes_hash() {
     let mut edited = record();
     edited.system_prompt = Some("Edited prompt.".into());
     assert_ne!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -157,8 +201,22 @@ fn persona_runtime_edit_changes_hash() {
     let before = [persona("pers", Some("goose"), "prompt")];
     let after = [persona("pers", Some("claude"), "prompt")];
     assert_ne!(
-        spawn_config_hash(&rec, &before, &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&rec, &after, &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &before,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &rec,
+            &after,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -172,8 +230,22 @@ fn persona_prompt_edit_changes_hash() {
     let before = [persona("pers", Some("goose"), "old prompt")];
     let after = [persona("pers", Some("goose"), "new prompt")];
     assert_ne!(
-        spawn_config_hash(&rec, &before, &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&rec, &after, &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &before,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &rec,
+            &after,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -188,8 +260,22 @@ fn workspace_relay_change_trips_hash_even_for_stored_record_relay() {
         "fixture should carry a legacy pin"
     );
     assert_ne!(
-        spawn_config_hash(&rec, &[], &[], "wss://relay-a.example", &Default::default()),
-        spawn_config_hash(&rec, &[], &[], "wss://relay-b.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://relay-a.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://relay-b.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -202,8 +288,8 @@ fn stored_record_relay_does_not_affect_hash() {
     a.relay_url = String::new();
     b.relay_url = "wss://legacy-pin.example".into();
     assert_eq!(
-        spawn_config_hash(&a, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&b, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(&a, &[], &[], "wss://ws.example", &Default::default(), false),
+        spawn_config_hash(&b, &[], &[], "wss://ws.example", &Default::default(), false)
     );
 }
 
@@ -214,8 +300,22 @@ fn respond_to_allowlist_edit_changes_hash() {
     edited.respond_to = RespondTo::Allowlist;
     edited.respond_to_allowlist = vec!["a".repeat(64)];
     assert_ne!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -227,8 +327,22 @@ fn allowlist_ignored_when_mode_is_not_allowlist() {
     let mut edited = record();
     edited.respond_to_allowlist = vec!["a".repeat(64)];
     assert_eq!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -245,8 +359,22 @@ fn allowlist_normalization_equivalent_edits_do_not_change_hash() {
         "a".repeat(64),                  // duplicate
     ];
     assert_eq!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -258,8 +386,22 @@ fn allowlist_content_edit_still_changes_hash() {
     let mut edited = rec.clone();
     edited.respond_to_allowlist = vec!["b".repeat(64)];
     assert_ne!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -269,8 +411,22 @@ fn explicit_max_turn_duration_changes_hash_from_none() {
     let mut edited = record();
     edited.max_turn_duration_seconds = Some(7200);
     assert_ne!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -280,8 +436,22 @@ fn non_default_max_turn_duration_changes_hash() {
     let mut edited = record();
     edited.max_turn_duration_seconds = Some(42);
     assert_ne!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -296,8 +466,22 @@ fn non_spawn_bookkeeping_fields_do_not_change_hash() {
     edited.last_started_at = Some("later".into());
     edited.last_exit_code = Some(0);
     assert_eq!(
-        spawn_config_hash(&rec, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&edited, &[], &[], "wss://ws.example", &Default::default())
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &edited,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        )
     );
 }
 
@@ -327,14 +511,16 @@ fn resnapshot_does_not_clobber_record_quad_with_definition_absent_quad() {
             &quadless_definition,
             &[],
             "wss://ws.example",
-            &Default::default()
+            &Default::default(),
+            false
         ),
         spawn_config_hash(
             &rec,
             &definition_with_quad,
             &[],
             "wss://ws.example",
-            &Default::default()
+            &Default::default(),
+            false
         ),
         "definition quad must not leak into the spawn hash of an existing instance"
     );
@@ -350,8 +536,22 @@ fn empty_prompt_hashes_like_absent_prompt() {
     let mut empty = record();
     empty.system_prompt = Some(String::new());
     assert_eq!(
-        spawn_config_hash(&absent, &[], &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&empty, &[], &[], "wss://ws.example", &Default::default()),
+        spawn_config_hash(
+            &absent,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &empty,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
     );
 }
 
@@ -367,8 +567,22 @@ fn definition_runtime_edit_changes_hash_for_materialized_record() {
     let before = [persona("pers", Some("goose"), "prompt")];
     let after = [persona("pers", Some("claude"), "prompt")];
     assert_ne!(
-        spawn_config_hash(&rec, &before, &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&rec, &after, &[], "wss://ws.example", &Default::default()),
+        spawn_config_hash(
+            &rec,
+            &before,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &rec,
+            &after,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
         "definition runtime edit must badge a materialized, override-free instance"
     );
 }
@@ -385,8 +599,22 @@ fn known_runtime_pin_yields_to_definition_runtime_change() {
     let before = [persona("pers", Some("goose"), "prompt")];
     let after = [persona("pers", Some("claude"), "prompt")];
     assert_ne!(
-        spawn_config_hash(&rec, &before, &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&rec, &after, &[], "wss://ws.example", &Default::default()),
+        spawn_config_hash(
+            &rec,
+            &before,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &rec,
+            &after,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
         "stale known-runtime pin must not shadow a definition runtime edit"
     );
 }
@@ -403,8 +631,22 @@ fn custom_command_override_beats_definition_runtime_change() {
     let before = [persona("pers", Some("goose"), "prompt")];
     let after = [persona("pers", Some("claude"), "prompt")];
     assert_eq!(
-        spawn_config_hash(&rec, &before, &[], "wss://ws.example", &Default::default()),
-        spawn_config_hash(&rec, &after, &[], "wss://ws.example", &Default::default()),
+        spawn_config_hash(
+            &rec,
+            &before,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
+        spawn_config_hash(
+            &rec,
+            &after,
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            false
+        ),
         "custom command override must win regardless of definition runtime change"
     );
 }
@@ -428,14 +670,16 @@ fn missing_definition_leaves_materialized_runtime_in_hash() {
             no_personas,
             &[],
             "wss://ws.example",
-            &Default::default()
+            &Default::default(),
+            false
         ),
         spawn_config_hash(
             &no_runtime,
             no_personas,
             &[],
             "wss://ws.example",
-            &Default::default()
+            &Default::default(),
+            false
         ),
         "materialized runtime must still affect hash when definition is absent"
     );
@@ -455,4 +699,262 @@ fn effective_spawn_prompt_matches_hash_semantics() {
     );
     r.system_prompt = Some("real".into());
     assert_eq!(effective_spawn_prompt(&r).as_deref(), Some("real"));
+}
+
+/// (a) Wallet provision flips the hash; unprovision flips it back; stable
+/// across unrelated recomputation with the same presence bit.
+#[test]
+fn wallet_presence_flips_hash_and_returns_on_unprovision() {
+    let rec = record();
+    let unprovisioned = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        false,
+    );
+    let provisioned = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        true,
+    );
+    assert_ne!(
+        unprovisioned, provisioned,
+        "provisioning must change spawn_config_hash"
+    );
+    let unprovisioned_again = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        false,
+    );
+    assert_eq!(
+        unprovisioned, unprovisioned_again,
+        "unprovision must restore the prior hash"
+    );
+    assert_eq!(
+        provisioned,
+        spawn_config_hash(
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            true
+        ),
+        "same presence bit must recompute identically"
+    );
+}
+
+/// (b) Unchanged wallet presence + unchanged config → stable hash.
+#[test]
+fn wallet_presence_stable_when_unchanged() {
+    let rec = record();
+    let a = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        false,
+    );
+    let b = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        false,
+    );
+    assert_eq!(a, b);
+    let c = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        true,
+    );
+    let d = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        true,
+    );
+    assert_eq!(c, d);
+}
+
+/// Full chain: keyring provision → presence bit → hash flip → unprovision restores.
+#[tokio::test]
+async fn keyring_provision_unprovision_flips_spawn_hash_via_presence_bit() {
+    use crate::wallet::{
+        observe_agent_nwc_for_spawn, provision_agent_nwc, unprovision_agent_nwc, MapBlobBackend,
+    };
+    use buzz_wallet_pkg::fakes::FakeAdvertisementProbe;
+    use buzz_wallet_pkg::Capabilities;
+
+    const URI: &str =
+        "nostr+walletconnect://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?relay=wss://relay.example&secret=deadbeefcafebabe0123456789abcdef";
+
+    let rec = record();
+    let backend = MapBlobBackend::new();
+    let before = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        observe_agent_nwc_for_spawn(&rec.pubkey, &backend).provisioned,
+    );
+
+    let probe = FakeAdvertisementProbe::new();
+    probe.script_ok(Capabilities::from_advertisement_pair(
+        ["make_invoice", "lookup_invoice"],
+        ["make_invoice", "lookup_invoice"],
+    ));
+    provision_agent_nwc(&rec.pubkey, URI, &probe, &backend)
+        .await
+        .expect("provision");
+
+    let after_provision = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        observe_agent_nwc_for_spawn(&rec.pubkey, &backend).provisioned,
+    );
+    assert_ne!(before, after_provision);
+
+    unprovision_agent_nwc(&rec.pubkey, &backend).expect("unprovision");
+    let after_unprovision = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        observe_agent_nwc_for_spawn(&rec.pubkey, &backend).provisioned,
+    );
+    assert_eq!(before, after_unprovision);
+}
+
+/// Closest harnessable stand-in for `build_managed_agent_summary(...).needs_restart`:
+/// stamp a running-agent hash, flip wallet presence, assert
+/// [`spawn_config_has_drifted`] (the summary's hash_drift predicate) flips.
+#[test]
+fn needs_restart_predicate_flips_when_wallet_presence_changes() {
+    let rec = record();
+    let stamped = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        false,
+    );
+    assert!(
+        !spawn_config_has_drifted(
+            stamped,
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            Ok(false),
+        ),
+        "same presence must not badge"
+    );
+    assert!(
+        spawn_config_has_drifted(
+            stamped,
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            Ok(true),
+        ),
+        "provision under a running stamp must badge needs_restart"
+    );
+    let stamped_with_wallet = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        true,
+    );
+    assert!(spawn_config_has_drifted(
+        stamped_with_wallet,
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        Ok(false),
+    ));
+}
+
+/// Keyring unavailable must not flap needs_restart when only wallet polarity is unknown.
+#[test]
+fn keyring_unavailable_does_not_flap_wallet_drift() {
+    let rec = record();
+    let stamped = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        true,
+    );
+    assert!(
+        !spawn_config_has_drifted(
+            stamped,
+            &rec,
+            &[],
+            &[],
+            "wss://ws.example",
+            &Default::default(),
+            Err("agent_wallet_secret_unavailable".into()),
+        ),
+        "Err must not badge when stamp matches a presence polarity"
+    );
+}
+
+/// Defect-1 seam: the observation used for env is the same bit hashed.
+#[test]
+fn spawn_observation_bit_is_the_hash_input() {
+    use crate::wallet::observe_agent_nwc_for_spawn;
+    use crate::wallet::MapBlobBackend;
+
+    let rec = record();
+    let backend = MapBlobBackend::new();
+    let obs = observe_agent_nwc_for_spawn(&rec.pubkey, &backend);
+    // By construction — the runtime stamps `obs.provisioned` and injects `obs.uri`.
+    assert_eq!(obs.provisioned, obs.uri.is_some());
+    let hash_from_obs = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        obs.provisioned,
+    );
+    let hash_from_uri_decision = spawn_config_hash(
+        &rec,
+        &[],
+        &[],
+        "wss://ws.example",
+        &Default::default(),
+        obs.uri.is_some(),
+    );
+    assert_eq!(hash_from_obs, hash_from_uri_decision);
 }

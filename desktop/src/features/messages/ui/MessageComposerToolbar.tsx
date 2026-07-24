@@ -3,6 +3,7 @@ import type { Editor } from "@tiptap/react";
 import { AnimatePresence, motion } from "motion/react";
 import { ALargeSmall, ArrowUp, AtSign, Paperclip, X } from "lucide-react";
 
+import { RequestPaymentButton } from "@/features/wallet/RequestPaymentButton";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
@@ -33,6 +34,7 @@ export const MessageComposerToolbar = React.memo(
     onLinkButton,
     onOpenMentionPicker,
     onPaperclip,
+    onRequestPayment,
     sendDisabled,
   }: {
     composerDisabled: boolean;
@@ -50,6 +52,7 @@ export const MessageComposerToolbar = React.memo(
     onLinkButton: () => void;
     onOpenMentionPicker: () => void;
     onPaperclip: () => void;
+    onRequestPayment?: () => void;
     sendDisabled: boolean;
   }) {
     return (
@@ -224,6 +227,10 @@ export const MessageComposerToolbar = React.memo(
                     <TooltipContent>Formatting</TooltipContent>
                   </Tooltip>
                 </motion.div>
+                <RequestPaymentButton
+                  composerDisabled={composerDisabled}
+                  onRequestPayment={onRequestPayment}
+                />
               </motion.div>
             )}
           </AnimatePresence>

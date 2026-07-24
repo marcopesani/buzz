@@ -49,4 +49,12 @@ export type TimelineMessage = {
   kind?: number;
   tags?: string[][];
   reactions?: TimelineReaction[];
+  /**
+   * Winning decorative payment receipt for a KIND_PAYMENT_REQUEST row
+   * (aux `#e` join). Presence means the card renders Paid ✓.
+   */
+  paymentReceipt?: {
+    id: string;
+    createdAt: number;
+  } | null;
 };

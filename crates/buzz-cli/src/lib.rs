@@ -68,10 +68,13 @@ Buzz CLI — interact with a Buzz relay
 
 Configuration (flags override env vars):
   BUZZ_RELAY_URL     Relay base URL        [default: http://localhost:3000]
-  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
+  BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required for relay ops]
   BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
+  BUZZ_NWC_URI       Nostr Wallet Connect URI (optional; else 0600 secret file)
 
 The 'pack' subcommand runs locally and does not require a relay connection.
+NWC-only 'wallet' verbs (link/status/balance/receive/pay --bolt11/reconcile)
+do not require BUZZ_PRIVATE_KEY; request/receipt verbs do.
 
 Exit codes: 0=ok  1=bad input  2=relay/network error  3=auth error  4=other  5=write conflict
 Errors are JSON on stderr: {\"error\": \"<category>\", \"message\": \"<detail>\"}"
@@ -236,6 +239,82 @@ enum Cmd {
     /// Community moderation — reports queue, bans, timeouts, audit trail
     #[command(subcommand)]
     Moderation(ModerationCmd),
+    /// Link an external Lightning wallet (NWC) and pay / receive / request
+    #[command(subcommand)]
+    Wallet(WalletCmd),
+}
+
+/// Subcommands for `buzz wallet`.
+#[derive(Subcommand)]
+pub enum WalletCmd {
+    /// Link a wallet from an NWC URI (env, --uri, or stdin). Never echoes the secret.
+    #[command(after_help = "Examples:\n  \
+buzz wallet link --uri \"$BUZZ_NWC_URI\"\n  \
+echo \"$BUZZ_NWC_URI\" | buzz wallet link --uri -\n  \
+BUZZ_NWC_URI=nostr+walletconnect://… buzz wallet link")]
+    Link {
+        /// NWC URI, or '-' to read from stdin. Defaults to BUZZ_NWC_URI.
+        #[arg(long)]
+        uri: Option<String>,
+    },
+    /// Show linked status, capabilities, and receive mode (no secret material).
+    Status,
+    /// Show wallet balance in millisatoshis (null when unsupported).
+    Balance,
+    /// Mint a bolt11 invoice (interactive receive).
+    Receive {
+        /// Amount in millisatoshis.
+        #[arg(long)]
+        amount_msat: u64,
+        /// Optional invoice description / memo.
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Publish a kind-40009 payment request in a channel (embeds a bolt11 when linked).
+    Request {
+        /// Channel UUID.
+        #[arg(long)]
+        channel: String,
+        /// Amount in millisatoshis.
+        #[arg(long)]
+        amount_msat: u64,
+        /// Optional memo on the request card.
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Pay a bolt11 or an in-chat payment request (requires --yes to confirm).
+    #[command(
+        after_help = "Without --yes, prints a quote and exits without paying.\n\n\
+Examples:\n  \
+buzz wallet pay --bolt11 lnbc1…\n  \
+buzz wallet pay --bolt11 lnbc1… --yes\n  \
+buzz wallet pay --request <event-id> --channel <uuid> --yes"
+    )]
+    Pay {
+        /// Bolt11 invoice to pay.
+        #[arg(long, conflicts_with_all = ["request", "channel"])]
+        bolt11: Option<String>,
+        /// Kind-40009 payment request event id.
+        #[arg(long, requires = "channel")]
+        request: Option<String>,
+        /// Channel UUID of the payment request.
+        #[arg(long, requires = "request")]
+        channel: Option<String>,
+        /// Required to actually pay (explicit confirmation).
+        #[arg(long, default_value_t = false)]
+        yes: bool,
+    },
+    /// Check an incoming payment against this wallet (Paid / Unpaid / Unconfirmable).
+    Check {
+        /// Kind-40009 payment request event id.
+        #[arg(long)]
+        request: String,
+        /// Channel UUID of the payment request.
+        #[arg(long)]
+        channel: String,
+    },
+    /// Drain Paying/Unknown attempts via lookup_invoice (never re-fires pay).
+    Reconcile,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -824,6 +903,9 @@ pub enum UsersCmd {
         /// NIP-05 identifier (e.g. user@example.com)
         #[arg(long)]
         nip05: Option<String>,
+        /// Lightning Address (LUD-16, e.g. user@wallet.example)
+        #[arg(long)]
+        lud16: Option<String>,
     },
     /// Get presence status for users
     Presence {
@@ -1738,6 +1820,17 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         };
     }
 
+    // Wallet: NWC-only verbs work without a Buzz key; request/receipt need one.
+    if let Cmd::Wallet(sub) = cli.command {
+        return run_wallet(
+            sub,
+            &relay_url,
+            cli.private_key.as_deref(),
+            cli.auth_tag.as_deref(),
+        )
+        .await;
+    }
+
     // Auth: private key is required for all relay operations.
     // The keypair IS the identity — no tokens, no other auth.
     let private_key_str = cli.private_key.ok_or_else(|| {
@@ -1785,8 +1878,96 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Upload(sub) => commands::upload::dispatch(sub, &client).await,
         Cmd::Mem(sub) => commands::mem::dispatch(sub, &client).await,
         Cmd::Moderation(sub) => commands::moderation::dispatch(sub, &client, &cli.format).await,
-        Cmd::Pack(_) => unreachable!("handled above"),
+        Cmd::Pack(_) | Cmd::Wallet(_) => unreachable!("handled above"),
     }
+}
+
+async fn run_wallet(
+    sub: WalletCmd,
+    relay_url: &str,
+    private_key: Option<&str>,
+    auth_tag_json: Option<&str>,
+) -> Result<(), CliError> {
+    let needs_client = matches!(
+        sub,
+        WalletCmd::Request { .. }
+            | WalletCmd::Pay {
+                request: Some(_),
+                ..
+            }
+            | WalletCmd::Check { .. }
+    );
+
+    if needs_client {
+        let private_key_str = private_key.ok_or_else(|| {
+            CliError::Auth(
+                "BUZZ_PRIVATE_KEY is required for wallet request/pay --request/check".into(),
+            )
+        })?;
+        let keys = Keys::parse(private_key_str)
+            .map_err(|e| CliError::Key(format!("invalid BUZZ_PRIVATE_KEY: {e}")))?;
+        let (auth_tag, auth_tag_owned) = match auth_tag_json {
+            Some(json) if !json.is_empty() => {
+                let tag = buzz_sdk::nip_oa::parse_auth_tag(json)
+                    .map_err(|e| CliError::Auth(format!("BUZZ_AUTH_TAG is malformed: {e}")))?;
+                buzz_sdk::nip_oa::verify_auth_tag(json, &keys.public_key()).map_err(|e| {
+                    CliError::Auth(format!(
+                        "BUZZ_AUTH_TAG verification failed for pubkey {}: {e}",
+                        keys.public_key().to_hex()
+                    ))
+                })?;
+                (Some(tag), Some(json.to_string()))
+            }
+            _ => (None, None),
+        };
+        let client = BuzzClient::new(relay_url.to_string(), keys, auth_tag, auth_tag_owned)?;
+        return commands::wallet::dispatch(
+            sub,
+            commands::wallet::WalletCtx {
+                relay_url,
+                client: Some(&client),
+            },
+        )
+        .await;
+    }
+
+    // Optional client for link → lud16 profile publish when a key is present.
+    if let Some(private_key_str) = private_key {
+        let keys = Keys::parse(private_key_str)
+            .map_err(|e| CliError::Key(format!("invalid BUZZ_PRIVATE_KEY: {e}")))?;
+        let (auth_tag, auth_tag_owned) = match auth_tag_json {
+            Some(json) if !json.is_empty() => {
+                let tag = buzz_sdk::nip_oa::parse_auth_tag(json)
+                    .map_err(|e| CliError::Auth(format!("BUZZ_AUTH_TAG is malformed: {e}")))?;
+                buzz_sdk::nip_oa::verify_auth_tag(json, &keys.public_key()).map_err(|e| {
+                    CliError::Auth(format!(
+                        "BUZZ_AUTH_TAG verification failed for pubkey {}: {e}",
+                        keys.public_key().to_hex()
+                    ))
+                })?;
+                (Some(tag), Some(json.to_string()))
+            }
+            _ => (None, None),
+        };
+        let client = BuzzClient::new(relay_url.to_string(), keys, auth_tag, auth_tag_owned)?;
+        return commands::wallet::dispatch(
+            sub,
+            commands::wallet::WalletCtx {
+                relay_url,
+                client: Some(&client),
+            },
+        )
+        .await;
+    }
+
+    commands::wallet::dispatch(
+        sub,
+        commands::wallet::WalletCtx {
+            relay_url,
+            client: None,
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1823,6 +2004,7 @@ mod tests {
             "social",
             "upload",
             "users",
+            "wallet",
             "workflows",
         ];
 
@@ -1987,6 +2169,19 @@ mod tests {
                 "untimeout"
             ]
         );
+        assert_eq!(
+            names(&cmd, "wallet"),
+            vec![
+                "balance",
+                "check",
+                "link",
+                "pay",
+                "receive",
+                "reconcile",
+                "request",
+                "status"
+            ]
+        );
     }
 
     #[test]
@@ -2009,6 +2204,7 @@ mod tests {
             ("social", 7),
             ("upload", 1),
             ("users", 4),
+            ("wallet", 8),
             ("workflows", 8),
         ];
 

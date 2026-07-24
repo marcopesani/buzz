@@ -5,6 +5,7 @@ mod config;
 mod engram_fetch;
 mod filter;
 mod observer;
+mod payment_receipt;
 mod pool;
 mod pool_lifecycle;
 mod queue;
@@ -21,13 +22,14 @@ use std::time::Duration;
 use acp::{AcpClient, EnvVar, McpServer};
 use anyhow::Result;
 use buzz_core::kind::{
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
-    KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_PAYMENT_RECEIPT,
+    KIND_STREAM_MESSAGE, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
 use buzz_core::observer::{
     decrypt_observer_payload, encrypt_observer_payload, OBSERVER_FRAME_TELEMETRY,
     OBSERVER_MAX_PLAINTEXT_LEN,
 };
+use buzz_core::payment::PaymentReceipt;
 use clap::Parser;
 use config::{
     AuthAgentArgs, AuthMethodsArgs, AuthenticateArgs, Config, DedupMode, ModelsArgs,
@@ -1527,6 +1529,7 @@ async fn tokio_main() -> Result<()> {
     }
 
     let base_prompt_content = config.base_prompt_content.take();
+    let wallet_provisioned = config.wallet_provisioned;
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
@@ -1538,10 +1541,11 @@ async fn tokio_main() -> Result<()> {
         team_instructions: config.team_instructions.clone(),
         base_prompt: if config.no_base_prompt {
             None
-        } else if let Some(content) = base_prompt_content {
-            Some(Box::leak(content.into_boxed_str()))
         } else {
-            Some(include_str!("base_prompt.md"))
+            let raw =
+                base_prompt_content.unwrap_or_else(|| include_str!("base_prompt.md").to_string());
+            let composed = payment_receipt::compose_base_prompt(&raw, wallet_provisioned);
+            Some(Box::leak(composed.into_boxed_str()) as &'static str)
         },
         heartbeat_prompt: config.heartbeat_prompt.clone(),
         cwd: std::env::current_dir()
@@ -1560,6 +1564,7 @@ async fn tokio_main() -> Result<()> {
         memory_enabled: config.memory_enabled,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
         relay_url: config.relay_url.clone(),
+        wallet_provisioned,
     });
 
     if !config.memory_enabled {
@@ -1661,6 +1666,10 @@ async fn tokio_main() -> Result<()> {
     // Rotates at 1000 entries instead of clearing the entire set at 2000.
     let mut seen_membership_current: HashSet<String> = HashSet::new();
     let mut seen_membership_previous: HashSet<String> = HashSet::new();
+
+    // Idempotent payment-receipt wakes: reconnect / overlapping filters must
+    // produce at most one agent turn per receipt event id.
+    let mut woken_receipt_ids = payment_receipt::ReceiptWakeDedupe::new(4_096);
 
     // Channels the agent has been removed from. When a checked-out agent is
     // returned to the pool, its sessions for these channels are stripped, and
@@ -2018,6 +2027,96 @@ async fn tokio_main() -> Result<()> {
                                             drained = drained_ids.len(),
                                             invalidated,
                                             "cleaned up after membership removal"
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
+
+                            // Payment receipts (kind 40010): decorative hints only.
+                            // Bypass mention rules and respond_to author gate — the
+                            // payer authors the receipt, ownership is the referenced
+                            // 40009's author. Wallet-less agents never subscribe, but
+                            // still ignore if one arrives.
+                            if kind_u32 == KIND_PAYMENT_RECEIPT {
+                                if !config.wallet_provisioned {
+                                    tracing::debug!(
+                                        channel_id = %buzz_event.channel_id,
+                                        "payment receipt ignored — agent has no wallet"
+                                    );
+                                    continue;
+                                }
+                                let receipt_id = buzz_event.event.id.to_hex();
+                                let tags = payment_receipt::event_tags_as_vecs(&buzz_event.event);
+                                let parsed = match PaymentReceipt::from_tags(&tags) {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        tracing::debug!(
+                                            channel_id = %buzz_event.channel_id,
+                                            error = %e,
+                                            "malformed payment receipt — ignoring"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let request = match payment_receipt::fetch_payment_request(
+                                    &ctx.rest_client,
+                                    &parsed.request_id,
+                                )
+                                .await
+                                {
+                                    Ok(ev) => ev,
+                                    Err(e) => {
+                                        tracing::debug!(
+                                            channel_id = %buzz_event.channel_id,
+                                            request_id = %parsed.request_id,
+                                            error = %e,
+                                            "payment request fetch failed — ignoring receipt"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                match payment_receipt::decide_receipt_wake(
+                                    &buzz_event.event,
+                                    request.as_ref(),
+                                    &config.keys.public_key(),
+                                ) {
+                                    payment_receipt::ReceiptWakeDecision::Wake { request_id } => {
+                                        if !woken_receipt_ids.insert_if_new(receipt_id.clone()) {
+                                            tracing::debug!(
+                                                channel_id = %buzz_event.channel_id,
+                                                event_id = %receipt_id,
+                                                "payment receipt wake already delivered — skipping"
+                                            );
+                                            continue;
+                                        }
+                                        tracing::info!(
+                                            channel_id = %buzz_event.channel_id,
+                                            request_id = %request_id,
+                                            receipt_id = %receipt_id,
+                                            "payment receipt for own request — waking agent"
+                                        );
+                                        let accepted = queue.push(QueuedEvent {
+                                            channel_id: buzz_event.channel_id,
+                                            event: buzz_event.event,
+                                            received_at: std::time::Instant::now(),
+                                            prompt_tag: payment_receipt::PAYMENT_RECEIPT_PROMPT_TAG
+                                                .into(),
+                                        });
+                                        if accepted && pool_ready {
+                                            for (channel_id, thread_tags) in
+                                                dispatch_pending(&mut pool, &mut queue, &ctx)
+                                            {
+                                                typing_channels.insert(channel_id, thread_tags);
+                                            }
+                                        }
+                                    }
+                                    payment_receipt::ReceiptWakeDecision::Ignore { reason } => {
+                                        tracing::debug!(
+                                            channel_id = %buzz_event.channel_id,
+                                            receipt_id = %receipt_id,
+                                            reason,
+                                            "payment receipt ignored"
                                         );
                                     }
                                 }
@@ -3503,10 +3602,12 @@ fn dispatch_heartbeat(
         None => return,
     };
 
-    let prompt_text = ctx
-        .heartbeat_prompt
-        .clone()
-        .unwrap_or_else(default_heartbeat_prompt);
+    let prompt_text = payment_receipt::compose_heartbeat_prompt(
+        &ctx.heartbeat_prompt
+            .clone()
+            .unwrap_or_else(default_heartbeat_prompt),
+        ctx.wallet_provisioned,
+    );
     let result_tx = pool.result_tx();
     let ctx_clone = Arc::clone(ctx);
     let agent_index = agent.index;
@@ -3559,6 +3660,28 @@ mod agent_draft_prompt_tests {
         assert!(prompt.contains("pass real newline bytes through stdin"));
         assert!(prompt.contains("single-quoted shell strings preserve `\\n` literally"));
         assert!(prompt.contains("buzz messages send ... --content -"));
+    }
+
+    #[test]
+    fn base_prompt_includes_wallet_section_iff_wallet_provisioned() {
+        let raw = include_str!("base_prompt.md");
+        let without = crate::payment_receipt::compose_base_prompt(raw, false);
+        assert!(!without.contains("## Lightning Wallet"));
+        let with = crate::payment_receipt::compose_base_prompt(raw, true);
+        assert!(with.contains("## Lightning Wallet"));
+        assert!(with.contains("buzz wallet request"));
+        assert!(with.contains("buzz wallet check"));
+        assert!(with.contains("decorative hints"));
+    }
+
+    #[test]
+    fn heartbeat_includes_wallet_nudge_iff_wallet_provisioned() {
+        let hb = crate::default_heartbeat_prompt();
+        let without = crate::payment_receipt::compose_heartbeat_prompt(&hb, false);
+        assert!(!without.contains("buzz wallet check"));
+        let with = crate::payment_receipt::compose_heartbeat_prompt(&hb, true);
+        assert!(with.contains("buzz wallet check"));
+        assert!(with.contains("never settlement truth"));
     }
 }
 
@@ -4131,6 +4254,16 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                     env.push(EnvVar {
                         name: "BUZZ_AUTH_TAG".into(),
                         value: auth_tag,
+                    });
+                }
+            }
+            // Forward receive-only NWC URI so agent `buzz wallet` CLI
+            // invocations via MCP inherit the provisioned connection.
+            if let Ok(nwc_uri) = std::env::var("BUZZ_NWC_URI") {
+                if !nwc_uri.is_empty() {
+                    env.push(EnvVar {
+                        name: "BUZZ_NWC_URI".into(),
+                        value: nwc_uri,
                     });
                 }
             }
@@ -4940,6 +5073,7 @@ mod build_mcp_servers_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            wallet_provisioned: false,
         }
     }
 
@@ -4990,6 +5124,36 @@ mod build_mcp_servers_tests {
         let server = &servers[0];
         let has_auth_tag = server.env.iter().any(|e| e.name == "BUZZ_AUTH_TAG");
         assert!(!has_auth_tag, "empty BUZZ_AUTH_TAG should not be forwarded");
+    }
+
+    #[test]
+    fn session_new_mcp_server_forwards_buzz_nwc_uri() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var(
+            "BUZZ_NWC_URI",
+            "nostr+walletconnect://pk?relay=wss://r.example&secret=abcd",
+        );
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("BUZZ_NWC_URI");
+
+        let server = &servers[0];
+        let nwc = server.env.iter().find(|e| e.name == "BUZZ_NWC_URI");
+        assert!(nwc.is_some(), "BUZZ_NWC_URI should be forwarded when set");
+        assert!(nwc.unwrap().value.starts_with("nostr+walletconnect://"));
+    }
+
+    #[test]
+    fn session_new_mcp_server_skips_empty_buzz_nwc_uri() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("BUZZ_NWC_URI", "");
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("BUZZ_NWC_URI");
+
+        let server = &servers[0];
+        let has_nwc = server.env.iter().any(|e| e.name == "BUZZ_NWC_URI");
+        assert!(!has_nwc, "empty BUZZ_NWC_URI should not be forwarded");
     }
 
     #[test]
@@ -5106,6 +5270,7 @@ mod error_outcome_emission_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            wallet_provisioned: false,
         }
     }
 

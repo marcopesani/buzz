@@ -11,6 +11,7 @@ type SettingsSection =
   | "tokens"
   | "community-members"
   | "mobile"
+  | "wallet"
   | "updates";
 
 export async function openProfileMenu(page: Page) {

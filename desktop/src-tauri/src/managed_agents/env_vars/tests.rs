@@ -146,6 +146,22 @@ fn reserved_keys_include_agent_owner_for_legacy_records() {
 }
 
 #[test]
+fn reserved_keys_include_buzz_nwc_uri() {
+    // Agent receive-only NWC URI is injected from the keyring at spawn.
+    // User env must not override or exfiltrate it.
+    assert!(is_reserved_env_key("BUZZ_NWC_URI"));
+    let agent = map(&[(
+        "BUZZ_NWC_URI",
+        "nostr+walletconnect://evil?relay=wss://x&secret=abcd",
+    )]);
+    let merged = merged_user_env(&BTreeMap::new(), &agent);
+    assert!(
+        !merged.contains_key("BUZZ_NWC_URI"),
+        "user BUZZ_NWC_URI must be stripped"
+    );
+}
+
+#[test]
 fn reserved_keys_include_respond_to_gate() {
     // Respond-to mode + allowlist control who the agent answers.
     // Overriding via env_vars would let the running agent answer

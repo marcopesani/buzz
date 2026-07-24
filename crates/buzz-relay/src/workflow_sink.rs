@@ -654,7 +654,15 @@ mod integration_tests {
             .expect("ensure agent user row");
         state
             .db
-            .update_user_profile(community, &agent_bytes, Some("Robby"), None, None, None)
+            .update_user_profile(
+                community,
+                &agent_bytes,
+                Some("Robby"),
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .expect("set agent display name");
         state

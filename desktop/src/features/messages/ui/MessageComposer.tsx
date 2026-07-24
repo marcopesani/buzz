@@ -10,6 +10,7 @@ import { resolveSentDraftKey } from "@/features/messages/ui/draftSubmitKey";
 import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomplete";
 import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomplete";
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
+import { RequestPaymentDialog } from "@/features/wallet/RequestPaymentDialog";
 import { buildCustomEmojiTags } from "@/shared/lib/customEmojiTags";
 import {
   buildOutgoingMessage,
@@ -137,6 +138,8 @@ type MessageComposerProps = {
       threadHeadId: string | null;
     } | null,
   ) => Promise<void>;
+  /** Optional V2 hook for the composer "Request payment" Zap control. */
+  onRequestPayment?: () => void;
   placeholder?: string;
   profiles?: UserProfileLookup;
   replyTarget?: {
@@ -169,6 +172,7 @@ function MessageComposerImpl({
   onEditSave,
   onPrepareSendChannel,
   onPreparingMentionSendChange,
+  onRequestPayment,
   onSend,
   placeholder,
   profiles,
@@ -189,6 +193,11 @@ function MessageComposerImpl({
   } = useComposerContentState();
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
   const [isFormattingOpen, setIsFormattingOpen] = React.useState(false);
+  const [requestPaymentOpen, setRequestPaymentOpen] = React.useState(false);
+  const openRequestPaymentDialog = React.useCallback(() => {
+    setRequestPaymentOpen(true);
+  }, []);
+  const handleRequestPayment = onRequestPayment ?? openRequestPaymentDialog;
   const [spoileredAttachmentUrls, setSpoileredAttachmentUrls] = React.useState<
     Set<string>
   >(() => new Set());
@@ -1088,6 +1097,7 @@ function MessageComposerImpl({
               onLinkButton={linkEditor.openFromToolbar}
               onOpenMentionPicker={openMentionPicker}
               onPaperclip={handlePaperclipClick}
+              onRequestPayment={handleRequestPayment}
               sendDisabled={sendDisabled}
             />
           </form>
@@ -1102,6 +1112,13 @@ function MessageComposerImpl({
         onDoNothing={mentionSendFlow.sendWithoutInviting}
         onInvite={mentionSendFlow.inviteNonMembers}
         open={mentionSendFlow.pendingNonMemberSend !== null}
+      />
+
+      <RequestPaymentDialog
+        channelId={channelId}
+        onOpenChange={setRequestPaymentOpen}
+        onPrepareSendChannel={onPrepareSendChannel}
+        open={requestPaymentOpen}
       />
 
       {linkEditor.card}

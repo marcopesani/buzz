@@ -153,10 +153,16 @@ pub async fn cmd_set_profile(
     avatar_url: Option<&str>,
     about: Option<&str>,
     nip05_handle: Option<&str>,
+    lud16: Option<&str>,
 ) -> Result<(), CliError> {
-    if display_name.is_none() && avatar_url.is_none() && about.is_none() && nip05_handle.is_none() {
+    if display_name.is_none()
+        && avatar_url.is_none()
+        && about.is_none()
+        && nip05_handle.is_none()
+        && lud16.is_none()
+    {
         return Err(CliError::Usage(
-            "at least one field required (--name, --avatar, --about, --nip05)".into(),
+            "at least one field required (--name, --avatar, --about, --nip05, --lud16)".into(),
         ));
     }
 
@@ -196,6 +202,12 @@ pub async fn cmd_set_profile(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     });
+    let merged_lud16 = lud16.map(|s| s.to_string()).or_else(|| {
+        current
+            .get("lud16")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
 
     let builder = buzz_sdk::build_profile(
         merged_name.as_deref(),
@@ -203,6 +215,7 @@ pub async fn cmd_set_profile(
         merged_picture.as_deref(),
         merged_about.as_deref(),
         merged_nip05.as_deref(),
+        merged_lud16.as_deref(),
     )
     .map_err(|e| CliError::Other(format!("build_profile failed: {e}")))?;
 
@@ -319,6 +332,7 @@ pub async fn dispatch(
             avatar,
             about,
             nip05,
+            lud16,
         } => {
             cmd_set_profile(
                 client,
@@ -326,6 +340,7 @@ pub async fn dispatch(
                 avatar.as_deref(),
                 about.as_deref(),
                 nip05.as_deref(),
+                lud16.as_deref(),
             )
             .await
         }

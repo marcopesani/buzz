@@ -27,13 +27,14 @@ use buzz_core::kind::{
     KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
     KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
     KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
-    KIND_NIP65_RELAY_LIST_METADATA, KIND_PERSONA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE,
-    KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE, KIND_REPORT,
-    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
-    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEXT_NOTE, KIND_USER_STATUS,
-    KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
-    RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_NIP65_RELAY_LIST_METADATA, KIND_PAYMENT_RECEIPT, KIND_PAYMENT_REQUEST, KIND_PERSONA,
+    KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_REACTION,
+    KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
+    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
+    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM,
+    KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
+    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use buzz_core::tenant::TenantContext;
 use buzz_core::verification::verify_event;
@@ -240,6 +241,8 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_STREAM_MESSAGE_SCHEDULED
         | KIND_STREAM_REMINDER
         | KIND_STREAM_MESSAGE_DIFF
+        | KIND_PAYMENT_REQUEST
+        | KIND_PAYMENT_RECEIPT
         | KIND_FORUM_POST
         | KIND_FORUM_VOTE
         | KIND_FORUM_COMMENT => Ok(Scope::MessagesWrite),
@@ -463,6 +466,8 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
             | KIND_STREAM_MESSAGE_SCHEDULED
             | KIND_STREAM_REMINDER
             | KIND_STREAM_MESSAGE_DIFF
+            | KIND_PAYMENT_REQUEST
+            | KIND_PAYMENT_RECEIPT
             | KIND_CANVAS
             | KIND_FORUM_POST
             | KIND_FORUM_VOTE
@@ -2923,6 +2928,26 @@ mod tests {
     fn unknown_kind_rejected() {
         let dummy = make_dummy_event();
         assert!(required_scope_for_kind(99999, &dummy).is_err());
+    }
+
+    #[test]
+    fn payment_kinds_require_messages_write_and_h_scope() {
+        let dummy = make_dummy_event();
+        for kind in [KIND_PAYMENT_REQUEST, KIND_PAYMENT_RECEIPT] {
+            assert_eq!(
+                required_scope_for_kind(kind, &dummy).unwrap(),
+                Scope::MessagesWrite,
+                "kind {kind} should require MessagesWrite scope"
+            );
+            assert!(
+                requires_h_channel_scope(kind),
+                "kind {kind} should require an h-tag channel scope"
+            );
+        }
+        assert!(
+            required_scope_for_kind(99999, &dummy).is_err(),
+            "unknown kind must still be rejected"
+        );
     }
 
     #[test]

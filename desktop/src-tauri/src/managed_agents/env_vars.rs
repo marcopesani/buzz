@@ -63,6 +63,9 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     "BUZZ_API_TOKEN",
     "BUZZ_ACP_PRIVATE_KEY",
     "BUZZ_ACP_API_TOKEN",
+    // Agent receive-only NWC URI — injected from keyring at spawn; never
+    // user-overridable (exfiltration / spend-capable swap).
+    "BUZZ_NWC_URI",
     // Relay URL: overriding would let a malicious config redirect the
     // agent to an attacker-controlled relay.
     "BUZZ_RELAY_URL",

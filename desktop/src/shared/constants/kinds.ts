@@ -20,6 +20,8 @@ export const KIND_STREAM_MESSAGE_EDIT = 40003;
 export const KIND_CHANNEL_THREAD_SUMMARY = 39005;
 export const KIND_CHANNEL_WINDOW_BOUNDS = 39006;
 export const KIND_STREAM_MESSAGE_DIFF = 40008;
+export const KIND_PAYMENT_REQUEST = 40009;
+export const KIND_PAYMENT_RECEIPT = 40010;
 export const KIND_REMINDER = 40007;
 export const KIND_SYSTEM_MESSAGE = 40099;
 export const KIND_JOB_REQUEST = 43001;
@@ -93,6 +95,8 @@ export const CHANNEL_EVENT_KINDS = [
   40001, // legacy: pre-migration stream messages
   KIND_STREAM_MESSAGE_EDIT, // 40003 — message edits
   KIND_STREAM_MESSAGE_DIFF, // 40008 — message diffs
+  KIND_PAYMENT_REQUEST, // 40009 — pay-request cards (own timeline row)
+  KIND_PAYMENT_RECEIPT, // 40010 — decorative Paid ✓ (aux `#e` join)
   KIND_SYSTEM_MESSAGE, // 40099 — system messages (join, leave, etc.)
   KIND_HUDDLE_STARTED, // 48100 — visible huddle session card
   KIND_HUDDLE_PARTICIPANT_JOINED, // 48101 — huddle lifecycle overlay
@@ -101,19 +105,21 @@ export const CHANNEL_EVENT_KINDS = [
 ] as const;
 
 // Auxiliary (non-row) timeline kinds: events that overlay onto or hide an
-// existing message rather than rendering their own row — reactions, edits, and
-// deletions. History fetches request the visible content kinds only, so the
-// `limit` budget buys visible message depth instead of being diluted by these
-// (on a reaction-heavy channel a 200-event window was only ~136 messages).
-// They are backfilled separately by `#e` reference over the loaded message ids
-// — by reference, not by time window, so a late edit/delete for a visible old
-// message still applies. NOTE: kind:40008 (diff) renders its OWN row, so it is
-// a content kind, not aux.
+// existing message rather than rendering their own row — reactions, edits,
+// deletions, and payment receipts. History fetches request the visible content
+// kinds only, so the `limit` budget buys visible message depth instead of being
+// diluted by these (on a reaction-heavy channel a 200-event window was only
+// ~136 messages). They are backfilled separately by `#e` reference over the
+// loaded message ids — by reference, not by time window, so a late edit/delete
+// (or receipt-before-request) for a visible old message still applies. NOTE:
+// kind:40008 (diff) and kind:40009 (payment request) render their OWN rows, so
+// they are content kinds, not aux.
 export const CHANNEL_AUX_EVENT_KINDS = [
   KIND_DELETION, // 5 — NIP-09 event deletions
   KIND_REACTION, // 7 — NIP-25 reactions
   KIND_NIP29_DELETE_EVENT, // 9005 — NIP-29 / Buzz-native deletions
   KIND_STREAM_MESSAGE_EDIT, // 40003 — message edits
+  KIND_PAYMENT_RECEIPT, // 40010 — Paid ✓ overlay on a payment request
 ] as const;
 
 // Visible content kinds the main timeline renders as their own rows. Mirrors
@@ -126,6 +132,7 @@ export const CHANNEL_TIMELINE_CONTENT_KINDS = [
   KIND_STREAM_MESSAGE, // 9
   KIND_STREAM_MESSAGE_V2, // 40002
   KIND_STREAM_MESSAGE_DIFF, // 40008 — diff messages (own row)
+  KIND_PAYMENT_REQUEST, // 40009 — pay-request cards
   KIND_SYSTEM_MESSAGE, // 40099 — system rows (join/leave/channel-created)
   KIND_JOB_REQUEST, // 43001
   KIND_JOB_ACCEPTED, // 43002

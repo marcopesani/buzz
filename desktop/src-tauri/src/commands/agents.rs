@@ -1295,6 +1295,11 @@ pub async fn delete_managed_agent(
             save_managed_agents(&app, &records)?;
             // Remove the agent's nsec from the keyring after the record is gone.
             crate::managed_agents::delete_agent_key(&pubkey);
+            // Best-effort: drop any receive-only NWC URI for this agent too.
+            let _ = crate::wallet::unprovision_agent_nwc(
+                &pubkey,
+                &crate::wallet::agent_nwc_os_backend(),
+            );
             // Tombstone-after-validation: only reached past the deployed-remote
             // guard above and a confirmed removal — never orphan a live remote
             // deployment's relay record. Inside the lock, before the block closes
@@ -1312,11 +1317,8 @@ pub async fn delete_managed_agent(
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
-// Remote agent shutdown is handled entirely by the frontend:
-// 1. Frontend sends "!shutdown" @mention via WebSocket (signed by user's key)
-// 2. Harness sees it, exits gracefully, sets presence to "offline"
-// 3. Desktop's existing presence polling sees "offline" — UI updates automatically
-// No backend Tauri command needed. Presence IS the status.
+// Remote agent shutdown is frontend-only (!shutdown @mention → harness exit →
+// presence offline). Agent NWC provision/unprovision: `agent_wallet.rs`.
 
 #[path = "agents_deploy.rs"]
 mod deploy;

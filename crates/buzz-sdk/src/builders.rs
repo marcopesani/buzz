@@ -11,8 +11,8 @@ use buzz_core::{
         KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED,
         KIND_GIT_STATUS_OPEN, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST,
         KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT,
-        KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_PRESENCE_UPDATE, KIND_WORKFLOW_DEF,
-        KIND_WORKFLOW_TRIGGER,
+        KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_PAYMENT_RECEIPT,
+        KIND_PAYMENT_REQUEST, KIND_PRESENCE_UPDATE, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
     },
     observer::{
         content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
@@ -531,15 +531,113 @@ pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder,
     Ok(EventBuilder::new(Kind::Custom(40100), content).tags(tags))
 }
 
+/// Build a payment request card (kind [`KIND_PAYMENT_REQUEST`]).
+///
+/// Tags carry the card payload; content is empty so renderers read one place.
+/// Amount is millisatoshis (domain unit) — sats belong at the UI boundary.
+///
+/// At least one of `bolt11` or `lud16` is required. The tag name is `expiry`
+/// (never `expiration`) — a deliberate NIP-40 divergence so a future
+/// NIP-40 auto-delete would not sweep pay cards.
+///
+/// Callers embedding a `bolt11` must pass an `expiry` already clamped to the
+/// decoded invoice expiry (`event expiry ≤ invoice expiry`). Bolt11 decoding
+/// is intentionally outside this crate.
+///
+/// `.allow_self_tagging()` is required: the CLI (and agents) set
+/// `payee_pubkey` to the signer's own key. nostr 0.44 strips matching `p`
+/// tags by default — without this, a self-payee request ships with no `p`
+/// and fails `PaymentRequest::from_tags` on the pay/check path.
+pub fn build_payment_request(
+    channel_id: Uuid,
+    amount_msat: u64,
+    payee_pubkey: &str,
+    bolt11: Option<&str>,
+    lud16: Option<&str>,
+    memo: Option<&str>,
+    expiry: Option<u64>,
+) -> Result<EventBuilder, SdkError> {
+    if amount_msat == 0 {
+        return Err(SdkError::InvalidInput(
+            "amount_msat must be greater than zero".into(),
+        ));
+    }
+    let has_bolt11 = bolt11.is_some_and(|s| !s.is_empty());
+    let has_lud16 = lud16.is_some_and(|s| !s.is_empty());
+    if !has_bolt11 && !has_lud16 {
+        return Err(SdkError::InvalidInput(
+            "payment request requires a bolt11 and/or lud16 target".into(),
+        ));
+    }
+    let payee = check_pubkey_hex(payee_pubkey, "payee_pubkey")?;
+
+    let mut tags = vec![
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["amount", &amount_msat.to_string()])?,
+        tag(&["p", &payee])?,
+    ];
+    if let Some(b11) = bolt11.filter(|s| !s.is_empty()) {
+        tags.push(tag(&["bolt11", b11])?);
+    }
+    if let Some(addr) = lud16.filter(|s| !s.is_empty()) {
+        tags.push(tag(&["lud16", addr])?);
+    }
+    if let Some(m) = memo.filter(|s| !s.is_empty()) {
+        tags.push(tag(&["memo", m])?);
+    }
+    if let Some(ts) = expiry {
+        tags.push(tag(&["expiry", &ts.to_string()])?);
+    }
+    Ok(
+        EventBuilder::new(Kind::Custom(KIND_PAYMENT_REQUEST as u16), "")
+            .tags(tags)
+            .allow_self_tagging(),
+    )
+}
+
+/// Build a decorative payment receipt (kind [`KIND_PAYMENT_RECEIPT`]).
+///
+/// References the request with a **bare** `["e", "<request-id>"]` tag — never
+/// NIP-10 `root`/`reply` markers (marked e-tags would inflate thread counters).
+///
+/// No `.allow_self_tagging()`: receipts carry no `p` tag (payer is the author;
+/// payee is identified only via the referenced request).
+pub fn build_payment_receipt(
+    channel_id: Uuid,
+    request_event_id: nostr::EventId,
+    payment_hash: &str,
+    preimage: &str,
+    amount_msat: u64,
+) -> Result<EventBuilder, SdkError> {
+    if amount_msat == 0 {
+        return Err(SdkError::InvalidInput(
+            "amount_msat must be greater than zero".into(),
+        ));
+    }
+    let payment_hash = check_hex_exact(payment_hash, 64, "payment_hash")?;
+    let preimage = check_hex_exact(preimage, 64, "preimage")?;
+    let tags = vec![
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["e", &request_event_id.to_hex()])?,
+        tag(&["payment_hash", &payment_hash])?,
+        tag(&["preimage", &preimage])?,
+        tag(&["amount", &amount_msat.to_string()])?,
+    ];
+    Ok(EventBuilder::new(Kind::Custom(KIND_PAYMENT_RECEIPT as u16), "").tags(tags))
+}
+
 /// Build a NIP-01 profile metadata event (kind 0).
 ///
 /// Only present (Some) fields are included in the JSON object.
+/// Callers that rebuild kind:0 from an allowlist must thread `lud16` through
+/// or the next profile edit silently clears the published Lightning address.
 pub fn build_profile(
     display_name: Option<&str>,
     name: Option<&str>,
     picture: Option<&str>,
     about: Option<&str>,
     nip05: Option<&str>,
+    lud16: Option<&str>,
 ) -> Result<EventBuilder, SdkError> {
     let mut map = serde_json::Map::new();
     if let Some(v) = display_name {
@@ -556,6 +654,9 @@ pub fn build_profile(
     }
     if let Some(v) = nip05 {
         map.insert("nip05".into(), serde_json::Value::String(v.into()));
+    }
+    if let Some(v) = lud16 {
+        map.insert("lud16".into(), serde_json::Value::String(v.into()));
     }
     let content = serde_json::Value::Object(map).to_string();
     Ok(EventBuilder::new(Kind::Custom(0), content).tags([]))
@@ -2318,6 +2419,7 @@ mod tests {
                 Some("https://example.com/pic.jpg"),
                 Some("Hello world"),
                 Some("alice@example.com"),
+                Some("alice@wallet.example"),
             )
             .unwrap(),
         );
@@ -2326,11 +2428,12 @@ mod tests {
         assert_eq!(v["display_name"], "Alice");
         assert_eq!(v["name"], "alice");
         assert_eq!(v["nip05"], "alice@example.com");
+        assert_eq!(v["lud16"], "alice@wallet.example");
     }
 
     #[test]
     fn profile_some_fields() {
-        let ev = sign(build_profile(Some("Bob"), None, None, None, None).unwrap());
+        let ev = sign(build_profile(Some("Bob"), None, None, None, None, None).unwrap());
         let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
         assert_eq!(v["display_name"], "Bob");
         assert!(
@@ -2342,9 +2445,156 @@ mod tests {
 
     #[test]
     fn profile_no_fields() {
-        let ev = sign(build_profile(None, None, None, None, None).unwrap());
+        let ev = sign(build_profile(None, None, None, None, None, None).unwrap());
         let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
         assert!(v.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn profile_round_trip_preserves_lud16_and_omits_when_none() {
+        let with =
+            sign(build_profile(None, None, None, None, None, Some("pay@example.com")).unwrap());
+        let v: serde_json::Value = serde_json::from_str(&with.content).unwrap();
+        assert_eq!(v["lud16"], "pay@example.com");
+
+        let without = sign(build_profile(Some("Bob"), None, None, None, None, None).unwrap());
+        let v: serde_json::Value = serde_json::from_str(&without.content).unwrap();
+        assert!(!v.as_object().unwrap().contains_key("lud16"));
+    }
+
+    #[test]
+    fn payment_request_event_shape_for_500_sats_with_memo_and_expiry() {
+        // Scenario: Request event shape — 500 sats → 500000 msat, memo lunch, expiry T.
+        let channel = uuid();
+        let payee = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+        let expiry_t = 1_700_000_000u64;
+        let bolt11 = "lnbc500u1pexampleinvoice";
+        let ev = sign(
+            build_payment_request(
+                channel,
+                500_000,
+                payee,
+                Some(bolt11),
+                None,
+                Some("lunch"),
+                Some(expiry_t),
+            )
+            .unwrap(),
+        );
+        assert_eq!(ev.kind.as_u16(), KIND_PAYMENT_REQUEST as u16);
+        assert_eq!(ev.content, "");
+        assert!(has_tag(&ev, "amount", "500000"));
+        assert!(has_tag(&ev, "memo", "lunch"));
+        assert!(has_tag(&ev, "h", &channel.to_string()));
+        assert!(has_tag(&ev, "p", payee));
+        assert!(has_tag(&ev, "expiry", &expiry_t.to_string()));
+        assert!(has_tag(&ev, "bolt11", bolt11));
+        assert!(tag_values(&ev, "expiration").is_empty());
+    }
+
+    #[test]
+    fn payment_request_accepts_lud16_only_target() {
+        let channel = uuid();
+        let payee = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+        let ev = sign(
+            build_payment_request(
+                channel,
+                1_000,
+                payee,
+                None,
+                Some("bob@example.com"),
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        assert!(has_tag(&ev, "lud16", "bob@example.com"));
+        assert!(tag_values(&ev, "bolt11").is_empty());
+        assert!(tag_values(&ev, "expiration").is_empty());
+    }
+
+    #[test]
+    fn payment_request_keeps_p_tag_when_payee_is_author() {
+        // Regression: nostr 0.44 strips self `p` tags unless allow_self_tagging.
+        let k = Keys::generate();
+        let payee = k.public_key().to_hex();
+        let channel = uuid();
+        let builder = build_payment_request(
+            channel,
+            21_000,
+            &payee,
+            Some("lnbc210n1selfpayee"),
+            None,
+            Some("self"),
+            Some(1_800_000_000),
+        )
+        .unwrap();
+        let ev = builder.sign_with_keys(&k).expect("sign self-payee request");
+        assert_eq!(ev.pubkey.to_hex(), payee);
+        assert!(
+            has_tag(&ev, "p", &payee),
+            "self-payee request must retain p tag; got tags: {:?}",
+            ev.tags
+                .iter()
+                .map(|t| t.as_slice().to_vec())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn payment_request_rejects_neither_target() {
+        let err = build_payment_request(
+            uuid(),
+            1_000,
+            "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn payment_request_rejects_zero_amount() {
+        let err = build_payment_request(
+            uuid(),
+            0,
+            "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+            Some("lnbc1"),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn payment_receipt_uses_bare_e_tag_without_nip10_marker() {
+        let channel = uuid();
+        let request_id = event_id();
+        let hash = "a".repeat(64);
+        let preimage = "b".repeat(64);
+        let ev =
+            sign(build_payment_receipt(channel, request_id, &hash, &preimage, 500_000).unwrap());
+        assert_eq!(ev.kind.as_u16(), KIND_PAYMENT_RECEIPT as u16);
+        assert!(has_tag(&ev, "h", &channel.to_string()));
+        assert!(has_tag(&ev, "payment_hash", &hash));
+        assert!(has_tag(&ev, "preimage", &preimage));
+        assert!(has_tag(&ev, "amount", "500000"));
+
+        let e_tags: Vec<_> = ev
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|v| v.as_str()) == Some("e"))
+            .collect();
+        assert_eq!(e_tags.len(), 1);
+        let e = e_tags[0].as_slice();
+        assert_eq!(e.len(), 2, "bare e-tag must be exactly [\"e\", id]");
+        assert_eq!(e[0].as_str(), "e");
+        assert_eq!(e[1].as_str(), request_id.to_hex());
     }
 
     #[test]

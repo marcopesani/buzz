@@ -11,6 +11,7 @@
  */
 
 import type { TimelineMessage } from "@/features/messages/types";
+import { KIND_PAYMENT_REQUEST } from "@/shared/constants/kinds";
 import { isSameDay, startOfLocalDaySeconds } from "./dateFormatters";
 
 /** Distance (px) from the bottom within which the timeline counts as "at bottom". */
@@ -260,6 +261,60 @@ export function isDeferredTimelineSnapshotStale({
   liveSnapshot: TimelineSnapshotIdentity;
 }): boolean {
   return deferredSnapshot.channelId !== liveSnapshot.channelId;
+}
+
+/**
+ * Copy decorative payment-receipt overlays from the live snapshot onto
+ * deferred KIND_PAYMENT_REQUEST rows with the same id.
+ *
+ * New live *rows* still wait for deferred/buffer admission. Only
+ * `paymentReceipt` on already-rendered 40009 ids bypasses deferral so Paid ✓
+ * is not stuck behind `useDeferredValue` while a dialog runs.
+ *
+ * Invariant: returns the input `deferred` array unchanged (same reference)
+ * unless some deferred 40009 needs a different `paymentReceipt` than live.
+ * Never swaps the whole live row and never touches reactions (those rebuild
+ * with fresh identities every ingest — see `reactionsEqual`).
+ */
+export function overlayLiveTimelineAuxFields(
+  deferred: readonly TimelineMessage[],
+  live: readonly TimelineMessage[],
+): TimelineMessage[] {
+  if (deferred === live || deferred.length === 0 || live.length === 0) {
+    return deferred as TimelineMessage[];
+  }
+
+  // Cheap gate: skip the map entirely when live has no receipt overlays.
+  let liveHasReceiptOverlay = false;
+  for (const message of live) {
+    if (
+      message.kind === KIND_PAYMENT_REQUEST &&
+      message.paymentReceipt != null
+    ) {
+      liveHasReceiptOverlay = true;
+      break;
+    }
+  }
+  if (!liveHasReceiptOverlay) {
+    return deferred as TimelineMessage[];
+  }
+
+  const liveById = new Map(live.map((message) => [message.id, message]));
+  let changed = false;
+  const next = deferred.map((message) => {
+    if (message.kind !== KIND_PAYMENT_REQUEST) return message;
+    const liveMessage = liveById.get(message.id);
+    if (!liveMessage) return message;
+    if (liveMessage.paymentReceipt?.id === message.paymentReceipt?.id) {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      paymentReceipt: liveMessage.paymentReceipt,
+    };
+  });
+  return changed ? next : (deferred as TimelineMessage[]);
 }
 
 // True when an older page merged into the live cache but the deferred render

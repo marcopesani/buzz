@@ -28,6 +28,19 @@ import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
+import {
+  ensurePaymentEventsToast,
+  resetPaymentEventsToast,
+} from "@/features/wallet/paymentEventsToast";
+import {
+  initPendingPaymentRequests,
+  resetPendingPaymentRequests,
+} from "@/features/wallet/pendingPaymentRequestsStore";
+import {
+  initReceiptOutbox,
+  resetReceiptOutbox,
+} from "@/features/wallet/receiptOutboxStore";
+import { resetWalletState } from "@/features/wallet/walletState";
 
 import {
   initFirstCommunity,
@@ -63,6 +76,10 @@ function resetCommunityState({
   resetRenderScopedReactionHydration();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
+  resetWalletState();
+  resetReceiptOutbox();
+  resetPendingPaymentRequests();
+  resetPaymentEventsToast();
 }
 
 type CommunityInitResult =
@@ -210,6 +227,7 @@ export function useCommunityInit(
           activeCommunity.token,
           activeCommunity.reposDir,
           getOverrides().agentManagedProfiles === true,
+          activeCommunity.id,
         );
       } catch (error) {
         // A bad `repos_dir` no longer reaches here — `apply_workspace` treats
@@ -255,6 +273,9 @@ export function useCommunityInit(
             err,
           );
         }
+        initReceiptOutbox(activeCommunity.id);
+        initPendingPaymentRequests(activeCommunity.id);
+        ensurePaymentEventsToast();
         // Restore any turn state saved for this community (a prior A→B round-
         // trip). This runs after applyCommunity succeeds and before the app
         // renders so components see the restored timers on first render.

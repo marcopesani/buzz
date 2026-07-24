@@ -606,3 +606,128 @@ buzz channels delete --channel "$FORUM_ID" | jq .
 | 59 | `notes get` | ☐ | By name, by naddr, --content-only, cross-author, ambiguous → exit 1 |
 | 60 | `notes ls` | ☐ | Own, --author all, --tag, --limit |
 | 61 | `notes rm` | ☐ | Delete→get 404, double-delete idempotent, missing slug → NotFound |
+
+## Local NWC mock wallet (`buzz-mock-wallet`)
+
+Dev-only loopback NWC wallet for end-to-end Lightning testing. **Moves no real money.**
+
+```bash
+# From repo root (Hermit activated)
+cargo run -p buzz-mock-wallet -- \
+  --balance-msat 1000000 \
+  --port 0
+  # optional: --receive-only
+  # optional: --fail-next-pay PAYMENT_FAILED
+  # optional: --response-delay-ms 250
+  # optional: --swallow-requests
+```
+
+On startup the process prints a ready-to-paste NWC URI on stdout, for example:
+
+```text
+nostr+walletconnect://<wallet_pubkey>?relay=ws%3A%2F%2F127.0.0.1%3A<port>&secret=<client_secret_hex>
+```
+
+Paste that URI into `buzz wallet link`, desktop link-wallet, or any NIP-47 client. The daemon speaks NIP-04 encrypted kinds `23194`/`23195`/`23196` (matching rust-nostr `nwc` 0.44), mints real bolt11 invoices, and keeps an in-memory msat ledger.
+
+| Flag | Meaning |
+|------|--------|
+| `--balance-msat` | Starting ledger balance (msat) |
+| `--port` | Loopback bind port (`0` = ephemeral) |
+| `--receive-only` | Omit pay methods from 13194 / `get_info`; pay → `RESTRICTED` |
+| `--fail-next-pay <CODE>` | Next `pay_invoice` returns that NIP-47 error code |
+| `--response-delay-ms` | Fixed delay before every RPC response |
+| `--swallow-requests` | Accept requests but never send 23195 (client-timeout tests) |
+
+## `buzz wallet` (NWC) runbook
+
+Thin CLI over `buzz-wallet`. Amounts are **msat** everywhere. The NWC secret
+never appears in stdout, stderr, or error JSON.
+
+### Env vars and secret file
+
+| Name | Purpose |
+|------|---------|
+| `BUZZ_NWC_URI` | NWC connection string (takes precedence over the secret file) |
+| `BUZZ_NWC_SECRET_PATH` | Override path for the durable secret JSON (default below) |
+| `BUZZ_WALLET_DATA_DIR` | Override directory for per-relay payment JSON |
+| `BUZZ_PRIVATE_KEY` | Required only for `request` / `pay --request` / `check` (Buzz relay) |
+| `BUZZ_RELAY_URL` | Community boundary for the payment store (default `http://localhost:3000`) |
+
+**Secret file (default):** `$XDG_CONFIG_HOME/buzz/nwc-secret.json`
+(via `dirs::config_dir()` — on macOS typically
+`~/Library/Application Support/buzz/nwc-secret.json`). Written by
+`buzz wallet link` with mode **0600** (parents **0700**). A secret file with
+group/other bits set is **refused** on read.
+
+**Payment store (default):** `$XDG_DATA_HOME/buzz/payments/<relay-key>.json`
+(mode 0600). One-shot processes reconcile Paying/Unknown on the next
+`status` / `pay` / `check` / `reconcile` invocation.
+
+**URI resolution order:** `BUZZ_NWC_URI` → secret file.
+
+### Subcommands
+
+```bash
+cargo build -p buzz-cli
+BUZZ=./target/debug/buzz
+
+# Link (URI via env, --uri, or stdin with --uri -). Never echoes the secret.
+BUZZ_NWC_URI="$URI" $BUZZ wallet link
+$BUZZ wallet status
+$BUZZ wallet balance
+$BUZZ wallet receive --amount-msat 21000 --description coffee
+# Quote only (no spend) unless --yes:
+$BUZZ wallet pay --bolt11 "$BOLT11"
+$BUZZ wallet pay --bolt11 "$BOLT11" --yes
+$BUZZ wallet reconcile
+
+# Relay verbs (need BUZZ_PRIVATE_KEY + a running Buzz relay):
+$BUZZ wallet request --channel <uuid> --amount-msat 500000 --description lunch
+$BUZZ wallet pay --request <event-id> --channel <uuid> --yes
+$BUZZ wallet check --request <event-id> --channel <uuid>
+```
+
+### Exit codes
+
+Same as the rest of the CLI: `0=ok 1=input 2=network/relay 3=auth 4=other 5=conflict`.
+
+Wallet-specific mapping:
+
+| Failure | Exit | Why |
+|---------|------|-----|
+| `Unsupported` / `Unauthorized` (incl. receive-only `RESTRICTED`) | **3** | Auth-ish: method refused / secret restricted |
+| Invalid URI, amountless/expired invoice, not linked | 1 | Bad input |
+| Unreachable wallet relay, resolve failure, unknown pay outcome | 4 | Other (wallet transport) |
+| Quote without `--yes` | **0** | Success path that deliberately does not pay |
+
+### Live transcript against `buzz-mock-wallet`
+
+```bash
+# 1. Start mock (capture URI from its stdout; do not paste into logs)
+cargo run -p buzz-mock-wallet -- --balance-msat 100000000 --port 0
+# Prefer the bare URI line: grep -m1 '^nostr+walletconnect://'
+# (an INFO line also embeds uri=… — do not feed that whole line to link)
+
+export BUZZ_NWC_SECRET_PATH=/tmp/buzz-wallet-proof/nwc-secret.json
+export BUZZ_WALLET_DATA_DIR=/tmp/buzz-wallet-proof/payments
+mkdir -p /tmp/buzz-wallet-proof
+
+# 2–6. Drive the CLI (redact URI from any saved transcript)
+BUZZ_NWC_URI="$URI" ./target/debug/buzz wallet link
+./target/debug/buzz wallet status
+./target/debug/buzz wallet balance
+INV=$(./target/debug/buzz wallet receive --amount-msat 21000)
+BOLT11=$(echo "$INV" | jq -r .bolt11)
+./target/debug/buzz wallet pay --bolt11 "$BOLT11"          # quote only
+./target/debug/buzz wallet pay --bolt11 "$BOLT11" --yes    # paid + preimage
+./target/debug/buzz wallet reconcile
+
+# 7. Receive-only leg — pay must fail with exit 3
+# restart mock with --receive-only, re-link, then:
+./target/debug/buzz wallet pay --bolt11 "$BOLT11" --yes; echo "exit=$?"
+```
+
+Relay-dependent verbs (`request` / `pay --request` / `check`) are covered by
+unit tests against the client/builder seams when a local relay is not up;
+do not fake a live transcript for those paths.

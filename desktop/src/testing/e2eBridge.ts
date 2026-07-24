@@ -223,6 +223,10 @@ type E2eConfig = {
     closeChannelLiveSubscriptionOnce?: boolean;
     /** Reject successive kind-9 sends with these messages, then resume. */
     sendMessageErrors?: string[];
+    /** Reject successive kind-40009 publishes with these messages, then resume. */
+    paymentRequestPublishErrors?: string[];
+    /** Reject successive kind-40010 publishes with these messages, then resume. */
+    paymentReceiptPublishErrors?: string[];
     /** Reject successive managed-agent starts, then resume. */
     startManagedAgentErrors?: string[];
     /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
@@ -395,6 +399,66 @@ type E2eConfig = {
      * spec can interleave edits and exercise the mid-save race handling.
      */
     globalConfigSaveDelayMs?: number;
+    /**
+     * Initial Lightning wallet mock status. Specs mutate via link_wallet /
+     * unlink_wallet; prepare/confirm outcomes are scriptable.
+     */
+    walletStatus?: {
+      linked?: boolean;
+      capabilities?: string[];
+      receive_mode?: string;
+      lud16?: string | null;
+      balance_msat?: number | null;
+    };
+    /**
+     * Managed-agent NWC wallet mock. Specs override via
+     * `__BUZZ_E2E_SET_AGENT_WALLET_MOCK__` for mid-test probe/keyring outcomes.
+     */
+    agentWallet?: {
+      /** Initial provisioned map keyed by agent pubkey. */
+      provisionedByPubkey?: Record<string, boolean>;
+      /**
+       * When set, `agent_wallet_status` throws this string (e.g.
+       * `agent_wallet_secret_unavailable`).
+       */
+      statusError?: string | null;
+      /**
+       * When set, the next `provision_managed_agent_wallet` throws this
+       * string (cleared after one failure unless `stickyProvisionError`).
+       */
+      provisionError?: string | null;
+      stickyProvisionError?: boolean;
+    };
+    /** bolt11 returned by wallet_receive (wrapped in ReceiveInvoice shape). */
+    walletReceiveBolt11?: string;
+    /** Seconds until the mock receive invoice expires (default 3600). */
+    walletReceiveExpiresInSecs?: number;
+    /** Confirm outcome for wallet_confirm (default settled). */
+    walletConfirmOutcome?:
+      | { status: "settled"; preimage: string }
+      | { status: "failed"; reason: string }
+      | { status: "unknown" }
+      | { status: "already_claimed"; state: string };
+    /**
+     * Incoming check outcome for wallet_check_incoming (default unpaid).
+     * Pass an array to script successive calls (queue; last entry sticks).
+     */
+    walletCheckIncomingOutcome?:
+      | { status: "paid" }
+      | { status: "unpaid" }
+      | { status: "unconfirmable" }
+      | Array<
+          | { status: "paid" }
+          | { status: "unpaid" }
+          | { status: "unconfirmable" }
+        >;
+    /** Settled pay-request rows returned by wallet_reconcile (default []). */
+    walletReconcileSettled?: Array<{
+      request_event_id: string;
+      payment_hash: string;
+      preimage: string | null;
+      amount_msat: number;
+    }>;
     /**
      * Override the `discover_agent_models` mock response. When set, returns
      * this catalog instead of the default per-harness model list.
@@ -934,9 +998,53 @@ function updateMockRelayMembershipFromAdminEvent(event: RelayEvent): boolean {
   return false;
 }
 
+const WALLET_PROXY_COMMANDS = new Set([
+  "link_wallet",
+  "unlink_wallet",
+  "wallet_status",
+  "wallet_receive",
+  "wallet_prepare_send",
+  "wallet_confirm",
+  "wallet_cancel",
+  "wallet_reconcile",
+  "wallet_check_incoming",
+]);
+
+async function proxyWalletCommand(
+  baseUrl: string,
+  command: string,
+  payload: unknown,
+): Promise<unknown> {
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cmd: command, args: payload ?? {} }),
+  });
+  const body = (await response.json()) as {
+    ok?: boolean;
+    result?: unknown;
+    error?: string;
+  };
+  if (!response.ok || body.ok === false) {
+    throw new Error(body.error ?? `wallet proxy failed for ${command}`);
+  }
+  if (command === "wallet_confirm") {
+    window.__BUZZ_E2E_LAST_WALLET_CONFIRM__ = body.result;
+  }
+  return body.result ?? null;
+}
+
 declare global {
   interface Window {
     __BUZZ_E2E__?: E2eConfig;
+    /**
+     * When set (loopback harness base URL), wallet IPC is proxied to a live
+     * WalletRuntime + buzz-mock-wallet instead of scripted mock responses.
+     * Inject via addInitScript BEFORE installMockBridge.
+     */
+    __BUZZ_E2E_WALLET_PROXY__?: string;
+    /** Last wallet_confirm result when using the live wallet proxy. */
+    __BUZZ_E2E_LAST_WALLET_CONFIRM__?: unknown;
     __BUZZ_E2E_COMMANDS__?: string[];
     __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
       command: string;
@@ -951,6 +1059,11 @@ declare global {
       channelName: string;
       kind?: number;
     }) => boolean;
+    /** Count events of `kind` in a mock channel's durable message store. */
+    __BUZZ_E2E_MOCK_KIND_COUNT__?: (input: {
+      channelName: string;
+      kind: number;
+    }) => number;
     __BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?: (input: {
       ownerPubkey: string;
       kind: number;
@@ -1038,6 +1151,19 @@ declare global {
     __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (state: ConnectionState) => void;
     __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => ConnectionState;
     __BUZZ_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
+    __BUZZ_E2E_SET_AGENT_WALLET_MOCK__?: (next: {
+      provisionedByPubkey?: Record<string, boolean>;
+      statusError?: string | null;
+      provisionError?: string | null;
+      stickyProvisionError?: boolean;
+    }) => void;
+    /** Mid-test override for wallet_check_incoming (single sticky outcome). */
+    __BUZZ_E2E_SET_WALLET_CHECK_INCOMING__?: (
+      outcome:
+        | { status: "paid" }
+        | { status: "unpaid" }
+        | { status: "unconfirmable" },
+    ) => void;
     __BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_SET_MESH__?: (mesh: {
@@ -1132,6 +1258,7 @@ const CHANNEL_WINDOW_AUX_KINDS = new Set([
   KIND_DELETION,
   KIND_NIP29_DELETION,
   KIND_STREAM_MESSAGE_EDIT,
+  40010, // payment receipt — aux `#e` join onto 40009 rows
 ]);
 const CHANNEL_WINDOW_AUX_DELETION_KINDS = new Set([
   KIND_DELETION,
@@ -2782,10 +2909,159 @@ function resetMockMesh() {
   mockMeshState.nodeState = "off";
   mockMeshState.nodeMode = null;
 }
+
+type MockWalletStatus = {
+  linked: boolean;
+  capabilities: string[];
+  receive_mode: string;
+  lud16: string | null;
+  balance_msat: number | null;
+};
+
+const mockWalletState: {
+  status: MockWalletStatus;
+  receiveBolt11: string;
+  receiveExpiresInSecs: number;
+  confirmOutcome:
+    | { status: "settled"; preimage: string }
+    | { status: "failed"; reason: string }
+    | { status: "unknown" }
+    | { status: "already_claimed"; state: string };
+  checkIncomingOutcome:
+    | { status: "paid" }
+    | { status: "unpaid" }
+    | { status: "unconfirmable" };
+  /** When non-empty, each wallet_check_incoming shifts one outcome. */
+  checkIncomingQueue: Array<
+    { status: "paid" } | { status: "unpaid" } | { status: "unconfirmable" }
+  >;
+  reconcileSettled: Array<{
+    request_event_id: string;
+    payment_hash: string;
+    preimage: string | null;
+    amount_msat: number;
+  }>;
+  handles: Map<
+    string,
+    {
+      amount_msat: number;
+      bolt11: string;
+      payment_hash: string;
+      expires_at_unix: number;
+      target_description: string | null;
+    }
+  >;
+} = {
+  status: {
+    linked: false,
+    capabilities: [],
+    receive_mode: "unavailable",
+    lud16: null,
+    balance_msat: null,
+  },
+  receiveBolt11:
+    "lnbc210n1pmockinvoice000000000000000000000000000000000000000000000000000",
+  receiveExpiresInSecs: 3600,
+  confirmOutcome: {
+    status: "settled",
+    preimage: "ab".repeat(32),
+  },
+  checkIncomingOutcome: { status: "unpaid" },
+  checkIncomingQueue: [],
+  reconcileSettled: [],
+  handles: new Map(),
+};
+
+function resetMockWallet(config: E2eConfig | undefined) {
+  const seed = config?.mock?.walletStatus;
+  mockWalletState.status = {
+    linked: seed?.linked ?? false,
+    capabilities: seed?.capabilities ?? [
+      "pay_invoice",
+      "make_invoice",
+      "lookup_invoice",
+      "get_balance",
+    ],
+    receive_mode: seed?.receive_mode ?? "interactive",
+    lud16: seed?.lud16 ?? null,
+    balance_msat: seed?.balance_msat ?? 21_000_000,
+  };
+  if (!seed?.linked) {
+    mockWalletState.status = {
+      linked: false,
+      capabilities: [],
+      receive_mode: "unavailable",
+      lud16: null,
+      balance_msat: null,
+    };
+  }
+  mockWalletState.receiveBolt11 =
+    config?.mock?.walletReceiveBolt11 ??
+    "lnbc210n1pmockinvoice000000000000000000000000000000000000000000000000000";
+  mockWalletState.receiveExpiresInSecs =
+    config?.mock?.walletReceiveExpiresInSecs ?? 3600;
+  mockWalletState.confirmOutcome = config?.mock?.walletConfirmOutcome ?? {
+    status: "settled",
+    preimage: "ab".repeat(32),
+  };
+  const checkSeed = config?.mock?.walletCheckIncomingOutcome;
+  if (Array.isArray(checkSeed)) {
+    mockWalletState.checkIncomingQueue = [...checkSeed];
+    mockWalletState.checkIncomingOutcome = checkSeed[checkSeed.length - 1] ?? {
+      status: "unpaid",
+    };
+  } else {
+    mockWalletState.checkIncomingQueue = [];
+    mockWalletState.checkIncomingOutcome = checkSeed ?? { status: "unpaid" };
+  }
+  mockWalletState.reconcileSettled = config?.mock?.walletReconcileSettled ?? [];
+  mockWalletState.handles.clear();
+}
+
+const mockAgentWalletState: {
+  provisionedByPubkey: Map<string, boolean>;
+  statusError: string | null;
+  provisionError: string | null;
+  stickyProvisionError: boolean;
+} = {
+  provisionedByPubkey: new Map(),
+  statusError: null,
+  provisionError: null,
+  stickyProvisionError: false,
+};
+
+function resetMockAgentWallet(config: E2eConfig | undefined) {
+  mockAgentWalletState.provisionedByPubkey.clear();
+  const seed = config?.mock?.agentWallet;
+  for (const [pubkey, provisioned] of Object.entries(
+    seed?.provisionedByPubkey ?? {},
+  )) {
+    mockAgentWalletState.provisionedByPubkey.set(pubkey, provisioned);
+  }
+  mockAgentWalletState.statusError = seed?.statusError ?? null;
+  mockAgentWalletState.provisionError = seed?.provisionError ?? null;
+  mockAgentWalletState.stickyProvisionError =
+    seed?.stickyProvisionError ?? false;
+}
+
+function markAgentNeedsRestartIfRunning(pubkey: string) {
+  const agent = mockManagedAgents.find((row) => row.pubkey === pubkey);
+  if (!agent) return;
+  if (agent.status === "running" || agent.status === "deployed") {
+    agent.needs_restart = true;
+  }
+}
 let mockPersonas: RawPersona[] = [];
 let mockTeams: RawTeam[] = [];
 // Listeners registered via the mock __TAURI_INTERNALS__.listen — keyed by event name.
 const tauriEventListeners = new Map<string, Set<() => void>>();
+
+function emitAgentsDataChanged() {
+  for (const cb of tauriEventListeners.get("agents-data-changed") ?? []) {
+    cb();
+  }
+}
+
 const openedExternalUrls: string[] = [];
 const defaultMockRelayAgents: RawRelayAgent[] = [
   {
@@ -4202,6 +4478,7 @@ const TIMELINE_KINDS = new Set([
   9,
   40002,
   40008,
+  40009, // payment request (own timeline row)
   40099,
   43001,
   43002,
@@ -4999,6 +5276,7 @@ function filterMockProjectEvents(filter: MockFilter): RelayEvent[] {
     .slice(0, filter.limit ?? 500);
 }
 
+/** Nostr event ids are 32-byte hex (64 chars). UUID-without-dashes is only 32. */
 function mockEventId(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -5011,7 +5289,7 @@ function createMockEvent(
   tags: string[][],
   pubkey = DEFAULT_MOCK_IDENTITY.pubkey,
   createdAt = Math.floor(Date.now() / 1000),
-  id = crypto.randomUUID().replace(/-/g, ""),
+  id = mockEventId(),
 ): RelayEvent {
   return {
     id,
@@ -8711,6 +8989,23 @@ function sendToMockSocket(args: {
 
     const channelId = filter["#h"]?.[0];
     if (!channelId) {
+      // Id lookups (e.g. resolve 40009 for a receipt) span all channel stores.
+      const filterIds = filter.ids;
+      if (Array.isArray(filterIds) && filterIds.length > 0) {
+        const wanted = new Set(filterIds.map((id) => id.toLowerCase()));
+        for (const events of mockMessages.values()) {
+          for (const event of events) {
+            if (filter.kinds && !filter.kinds.includes(event.kind)) {
+              continue;
+            }
+            if (wanted.has(event.id.toLowerCase())) {
+              sendWsText(socket.handler, ["EVENT", subId, event]);
+            }
+          }
+        }
+        sendWsText(socket.handler, ["EOSE", subId]);
+        return;
+      }
       // Aux-backfill filters (reactions/deletions) are `#e`-keyed with no
       // channel tag — serve them across all channel stores like the relay.
       const referencedIds = filter["#e"];
@@ -8859,6 +9154,34 @@ function sendToMockSocket(args: {
       return;
     }
 
+    const paymentRequestPublishError =
+      event.kind === 40009
+        ? getConfig()?.mock?.paymentRequestPublishErrors?.shift()
+        : null;
+    if (paymentRequestPublishError) {
+      sendWsText(socket.handler, [
+        "OK",
+        event.id,
+        false,
+        paymentRequestPublishError,
+      ]);
+      return;
+    }
+
+    const paymentReceiptPublishError =
+      event.kind === 40010
+        ? getConfig()?.mock?.paymentReceiptPublishErrors?.shift()
+        : null;
+    if (paymentReceiptPublishError) {
+      sendWsText(socket.handler, [
+        "OK",
+        event.id,
+        false,
+        paymentReceiptPublishError,
+      ]);
+      return;
+    }
+
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     sendWsText(socket.handler, ["OK", event.id, true, ""]);
@@ -8897,6 +9220,8 @@ export function maybeInstallE2eTauriMocks() {
   seedMockSearchProfiles(config);
   resetMockWorkflows();
   resetMockMesh();
+  resetMockWallet(config);
+  resetMockAgentWallet(config);
   resetMockUserStatuses();
   resetMockSaveSubscriptions(config);
   resetMockPendingCommunityDeepLinks(config);
@@ -8907,6 +9232,28 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
   window.__BUZZ_E2E_WEBVIEW_ZOOM__ = 1;
+  window.__BUZZ_E2E_SET_AGENT_WALLET_MOCK__ = (next) => {
+    if (next.provisionedByPubkey) {
+      for (const [pubkey, provisioned] of Object.entries(
+        next.provisionedByPubkey,
+      )) {
+        mockAgentWalletState.provisionedByPubkey.set(pubkey, provisioned);
+      }
+    }
+    if (next.statusError !== undefined) {
+      mockAgentWalletState.statusError = next.statusError;
+    }
+    if (next.provisionError !== undefined) {
+      mockAgentWalletState.provisionError = next.provisionError;
+    }
+    if (next.stickyProvisionError !== undefined) {
+      mockAgentWalletState.stickyProvisionError = next.stickyProvisionError;
+    }
+  };
+  window.__BUZZ_E2E_SET_WALLET_CHECK_INCOMING__ = (outcome) => {
+    mockWalletState.checkIncomingQueue = [];
+    mockWalletState.checkIncomingOutcome = outcome;
+  };
   window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
@@ -8957,6 +9304,17 @@ export function maybeInstallE2eTauriMocks() {
     }
 
     return hasMockLiveSubscription(channel.id, kind);
+  };
+  window.__BUZZ_E2E_MOCK_KIND_COUNT__ = ({ channelName, kind }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+    return getMockMessageStore(channel.id).filter(
+      (event) => event.kind === kind,
+    ).length;
   };
   window.__BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__ = ({
     ownerPubkey,
@@ -9160,6 +9518,16 @@ export function maybeInstallE2eTauriMocks() {
       payload: loggedPayload,
     });
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
+
+    // One branch at the dispatch boundary: live harness vs scripted mocks.
+    const walletProxy = window.__BUZZ_E2E_WALLET_PROXY__;
+    if (
+      typeof walletProxy === "string" &&
+      walletProxy.length > 0 &&
+      WALLET_PROXY_COMMANDS.has(command)
+    ) {
+      return proxyWalletCommand(walletProxy, command, payload);
+    }
 
     switch (command) {
       case "get_builderlab_auth":
@@ -10850,6 +11218,167 @@ export function maybeInstallE2eTauriMocks() {
         return activeConfig?.mock?.agentMetricArchiveDefaultEnabled ?? false;
       case "set_prevent_sleep_active":
         return null;
+      case "link_wallet": {
+        const { uri } = (payload ?? {}) as { uri?: string };
+        if (!uri?.startsWith("nostr+walletconnect://")) {
+          throw new Error("invalid_uri");
+        }
+        mockWalletState.status = {
+          linked: true,
+          capabilities: [
+            "pay_invoice",
+            "make_invoice",
+            "lookup_invoice",
+            "get_balance",
+          ],
+          receive_mode: "interactive",
+          lud16: "alice@getalby.com",
+          balance_msat: 21_000_000,
+        };
+        return { ...mockWalletState.status };
+      }
+      case "unlink_wallet":
+        mockWalletState.status = {
+          linked: false,
+          capabilities: [],
+          receive_mode: "unavailable",
+          lud16: null,
+          balance_msat: null,
+        };
+        mockWalletState.handles.clear();
+        return null;
+      case "wallet_status":
+        return { ...mockWalletState.status };
+      case "wallet_receive": {
+        if (!mockWalletState.status.linked) {
+          throw new Error("not_linked");
+        }
+        return {
+          bolt11: mockWalletState.receiveBolt11,
+          payment_hash: "cd".repeat(32),
+          expires_at_unix:
+            Math.floor(Date.now() / 1000) +
+            mockWalletState.receiveExpiresInSecs,
+        };
+      }
+      case "wallet_prepare_send": {
+        if (!mockWalletState.status.linked) {
+          throw new Error("not_linked");
+        }
+        const args = (payload ?? {}) as {
+          target?: { type?: string; invoice?: string; address?: string };
+          amountMsat?: number;
+          amount_msat?: number;
+          memo?: string | null;
+        };
+        const amountMsat = args.amountMsat ?? args.amount_msat ?? 0;
+        const handleId = `mock-handle-${mockWalletState.handles.size + 1}`;
+        const bolt11 =
+          args.target?.type === "bolt11" && args.target.invoice
+            ? args.target.invoice
+            : mockWalletState.receiveBolt11;
+        const quote = {
+          handle_id: handleId,
+          amount_msat: amountMsat,
+          bolt11,
+          payment_hash: "cd".repeat(32),
+          expires_at_unix: Math.floor(Date.now() / 1000) + 3600,
+          target_description:
+            args.target?.type === "lud16"
+              ? (args.target.address ?? null)
+              : null,
+        };
+        mockWalletState.handles.set(handleId, quote);
+        return quote;
+      }
+      case "wallet_confirm": {
+        const { handleId, handle_id } = (payload ?? {}) as {
+          handleId?: string;
+          handle_id?: string;
+        };
+        const id = handleId ?? handle_id;
+        if (!id || !mockWalletState.handles.has(id)) {
+          throw new Error("unknown_handle");
+        }
+        return mockWalletState.confirmOutcome;
+      }
+      case "wallet_cancel": {
+        const { handleId, handle_id } = (payload ?? {}) as {
+          handleId?: string;
+          handle_id?: string;
+        };
+        const id = handleId ?? handle_id;
+        if (id) mockWalletState.handles.delete(id);
+        return null;
+      }
+      case "wallet_reconcile":
+        return [...mockWalletState.reconcileSettled];
+      case "wallet_check_incoming": {
+        if (!mockWalletState.status.linked) {
+          throw new Error("not_linked");
+        }
+        const queued = mockWalletState.checkIncomingQueue.shift();
+        if (queued) {
+          mockWalletState.checkIncomingOutcome = queued;
+          return { ...queued };
+        }
+        return { ...mockWalletState.checkIncomingOutcome };
+      }
+      case "agent_wallet_status": {
+        const { pubkey } = (payload ?? {}) as { pubkey?: string };
+        if (!pubkey?.trim()) {
+          throw new Error("agent pubkey is required");
+        }
+        if (mockAgentWalletState.statusError) {
+          throw new Error(mockAgentWalletState.statusError);
+        }
+        return {
+          provisioned:
+            mockAgentWalletState.provisionedByPubkey.get(pubkey) ?? false,
+        };
+      }
+      case "provision_managed_agent_wallet": {
+        const { pubkey, uri } = (payload ?? {}) as {
+          pubkey?: string;
+          uri?: string;
+        };
+        if (!pubkey?.trim()) {
+          throw new Error("agent pubkey is required");
+        }
+        if (!uri?.trim()) {
+          throw new Error("nwc uri is required");
+        }
+        if (!mockManagedAgents.some((agent) => agent.pubkey === pubkey)) {
+          throw new Error(`agent ${pubkey} not found`);
+        }
+        if (mockAgentWalletState.provisionError) {
+          const message = mockAgentWalletState.provisionError;
+          if (!mockAgentWalletState.stickyProvisionError) {
+            mockAgentWalletState.provisionError = null;
+          }
+          throw new Error(message);
+        }
+        if (!uri.startsWith("nostr+walletconnect://")) {
+          throw new Error("invalid_uri");
+        }
+        mockAgentWalletState.provisionedByPubkey.set(pubkey, true);
+        markAgentNeedsRestartIfRunning(pubkey);
+        emitAgentsDataChanged();
+        return null;
+      }
+      case "unprovision_managed_agent_wallet": {
+        const { pubkey } = (payload ?? {}) as { pubkey?: string };
+        if (!pubkey?.trim()) {
+          throw new Error("agent pubkey is required");
+        }
+        if (!mockManagedAgents.some((agent) => agent.pubkey === pubkey)) {
+          throw new Error(`agent ${pubkey} not found`);
+        }
+        mockAgentWalletState.provisionedByPubkey.set(pubkey, false);
+        markAgentNeedsRestartIfRunning(pubkey);
+        emitAgentsDataChanged();
+        return null;
+      }
       case "plugin:window|is_fullscreen":
         return false;
       case "merge_save_subscription_kinds": {

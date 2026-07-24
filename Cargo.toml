@@ -26,6 +26,8 @@ members = [
     "crates/buzz-pair-relay",
     "crates/buzz-relay-mesh",
     "crates/buzz-dev-mcp",
+    "crates/buzz-wallet",
+    "crates/buzz-mock-wallet",
     "examples/countdown-bot",
 ]
 exclude = ["desktop/src-tauri"]
@@ -58,7 +60,9 @@ redis        = { version = "1.0", features = ["tokio-comp", "connection-manager"
 deadpool-redis = { version = "0.23", features = ["rt_tokio_1"] }
 
 # Nostr
-nostr = { version = "0.44", features = ["nip44", "nip98"] }
+nostr = { version = "0.44", features = ["nip44", "nip47", "nip98"] }
+nwc = "0.44"
+nostr-relay-pool = "0.44"
 
 # Serialization
 serde       = { version = "1", features = ["derive"] }
@@ -96,6 +100,10 @@ reqwest = { version = "0.13", features = ["json", "rustls"], default-features = 
 sha2      = "0.11"
 hex       = "0.4"
 hmac      = "0.13"
+
+# Lightning (bolt11 decode/mint — buzz-wallet only, never buzz-core)
+lightning-invoice = "0.34.1"
+bitcoin = "0.32"
 
 # Randomness
 rand = "0.10"

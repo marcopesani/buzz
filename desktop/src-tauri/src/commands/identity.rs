@@ -103,6 +103,40 @@ pub fn get_media_proxy_port(state: State<'_, AppState>) -> u16 {
         .load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Sign a Nostr event with the given keys (shared by the Tauri command + tests).
+///
+/// Kind [`buzz_core_pkg::kind::KIND_PAYMENT_REQUEST`] (40009) enables
+/// `.allow_self_tagging()` so a self-payee `p` tag survives nostr 0.44's
+/// default scrub — matching `buzz_sdk::build_payment_request`. Receipts
+/// (40010) carry no `p` and are not included. Do not enable self-tagging for
+/// every kind: other `sign_event` callers rely on the default strip.
+pub(crate) fn sign_event_with_keys(
+    keys: &Keys,
+    kind: u16,
+    content: String,
+    created_at: Option<u64>,
+    tags: Vec<Vec<String>>,
+) -> Result<String, String> {
+    let nostr_tags = tags
+        .into_iter()
+        .map(|tag| Tag::parse(tag).map_err(|error| format!("invalid tag: {error}")))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut builder = EventBuilder::new(Kind::Custom(kind), content).tags(nostr_tags);
+    if kind == buzz_core_pkg::kind::KIND_PAYMENT_REQUEST as u16 {
+        builder = builder.allow_self_tagging();
+    }
+    if let Some(created_at) = created_at {
+        builder = builder.custom_created_at(Timestamp::from(created_at));
+    }
+
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|error| format!("sign failed: {error}"))?;
+
+    Ok(event.as_json())
+}
+
 #[tauri::command]
 pub async fn sign_event(
     kind: u16,
@@ -114,21 +148,7 @@ pub async fn sign_event(
     let keys = state.signing_keys()?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        let nostr_tags = tags
-            .into_iter()
-            .map(|tag| Tag::parse(tag).map_err(|error| format!("invalid tag: {error}")))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let mut builder = EventBuilder::new(Kind::Custom(kind), content).tags(nostr_tags);
-        if let Some(created_at) = created_at {
-            builder = builder.custom_created_at(Timestamp::from(created_at));
-        }
-
-        let event = builder
-            .sign_with_keys(&keys)
-            .map_err(|error| format!("sign failed: {error}"))?;
-
-        Ok(event.as_json())
+        sign_event_with_keys(&keys, kind, content, created_at, tags)
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
@@ -497,6 +517,56 @@ pub async fn nip44_decrypt_from_self(
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
+}
+
+#[cfg(test)]
+mod sign_event_self_p_tests {
+    use super::sign_event_with_keys;
+    use buzz_core_pkg::kind::KIND_PAYMENT_REQUEST;
+    use nostr::{JsonUtil, Keys};
+
+    #[test]
+    fn sign_event_retains_self_payee_p_tag_on_payment_request() {
+        // Regression: nostr 0.44 strips self `p` unless allow_self_tagging.
+        // Desktop PAY requests set payee = author; without the flag the signed
+        // 40009 loses `p` and CLI/agent PaymentRequest::from_tags rejects it.
+        let keys = Keys::generate();
+        let payee = keys.public_key().to_hex();
+        let channel = "11111111-1111-1111-1111-111111111111";
+        let json = sign_event_with_keys(
+            &keys,
+            KIND_PAYMENT_REQUEST as u16,
+            String::new(),
+            None,
+            vec![
+                vec!["h".into(), channel.into()],
+                vec!["amount".into(), "210000".into()],
+                vec!["p".into(), payee.clone()],
+                vec!["bolt11".into(), "lnbc210n1selfpayee".into()],
+                vec!["memo".into(), "self".into()],
+                vec!["expiry".into(), "1800000000".into()],
+            ],
+        )
+        .expect("sign payment request");
+
+        let event = nostr::Event::from_json(json).expect("parse signed json");
+        assert_eq!(event.kind.as_u16(), KIND_PAYMENT_REQUEST as u16);
+        assert_eq!(event.pubkey.to_hex(), payee);
+        let has_self_p = event.tags.iter().any(|tag| {
+            let slice = tag.as_slice();
+            slice.first().map(String::as_str) == Some("p")
+                && slice.get(1).map(String::as_str) == Some(payee.as_str())
+        });
+        assert!(
+            has_self_p,
+            "self-payee 40009 must retain p after sign_event; tags={:?}",
+            event
+                .tags
+                .iter()
+                .map(|t| t.as_slice().to_vec())
+                .collect::<Vec<_>>()
+        );
+    }
 }
 
 #[cfg(test)]

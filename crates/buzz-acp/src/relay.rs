@@ -3148,13 +3148,63 @@ async fn wait_for_reconnect(
     }
 }
 
-/// Send a NIP-01 REQ for a channel, built from a [`ChannelFilter`].
+/// Build the NIP-01 filter object(s) for a channel REQ.
 ///
 /// - `kinds` is included only when `filter.kinds` is `Some`; `None` = wildcard.
 /// - `#p` is included only when `filter.require_mention` is `true`.
 /// - `#h` is always included (channel-scoped subscription).
-/// - On first subscribe (`since` is `None`) adds `since=now` to avoid replaying
-///   history. On reconnect (`since` is `Some`) subtracts [`SINCE_SKEW_SECS`].
+/// - When `include_payment_receipts` is set and the primary filter would not
+///   already deliver kind 40010 without a `#p` gate, a second OR filter is
+///   appended: `{kinds:[40010], #h:[channel], since}` — receipts carry no `p`.
+///
+/// `since_ts` is the absolute unix timestamp already skewed by the caller.
+pub(crate) fn build_channel_req_filters(
+    channel_id: Uuid,
+    agent_pubkey_hex: &str,
+    since_ts: u64,
+    filter: &ChannelFilter,
+) -> Vec<Value> {
+    use buzz_core::kind::KIND_PAYMENT_RECEIPT;
+
+    let mut primary = serde_json::Map::new();
+    if let Some(ref kinds) = filter.kinds {
+        primary.insert("kinds".into(), json!(kinds));
+    }
+    primary.insert("#h".into(), json!([channel_id.to_string()]));
+    if filter.require_mention {
+        primary.insert("#p".into(), json!([agent_pubkey_hex]));
+    }
+    primary.insert("since".into(), json!(since_ts));
+
+    let mut filters = vec![Value::Object(primary)];
+
+    let needs_receipt_or = filter.include_payment_receipts
+        && match &filter.kinds {
+            // Wildcard already delivers every kind — no OR needed.
+            None => false,
+            Some(kinds) => {
+                // Need a separate unmentioned filter unless 40010 is already
+                // subscribed without a #p gate.
+                !kinds.contains(&KIND_PAYMENT_RECEIPT) || filter.require_mention
+            }
+        };
+
+    if needs_receipt_or {
+        let mut receipt = serde_json::Map::new();
+        receipt.insert("kinds".into(), json!([KIND_PAYMENT_RECEIPT]));
+        receipt.insert("#h".into(), json!([channel_id.to_string()]));
+        receipt.insert("since".into(), json!(since_ts));
+        filters.push(Value::Object(receipt));
+    }
+
+    filters
+}
+
+/// Send a NIP-01 REQ for a channel, built from a [`ChannelFilter`].
+///
+/// See [`build_channel_req_filters`] for filter shape. On first subscribe
+/// (`since` is `None`) adds `since=now` to avoid replaying history. On
+/// reconnect (`since` is `Some`) subtracts [`SINCE_SKEW_SECS`].
 ///
 /// Returns `true` if the REQ was successfully written to the WebSocket.
 async fn send_subscribe(
@@ -3167,23 +3217,6 @@ async fn send_subscribe(
 ) -> bool {
     let sub_id = channel_sub_id(channel_id);
 
-    let mut req_filter = serde_json::Map::new();
-
-    // kinds — omit entirely for wildcard subscriptions.
-    if let Some(ref kinds) = filter.kinds {
-        req_filter.insert("kinds".into(), json!(kinds));
-    }
-
-    // #h — always present (channel scope).
-    req_filter.insert("#h".into(), json!([channel_id.to_string()]));
-
-    // #p — only when require_mention is true.
-    if filter.require_mention {
-        req_filter.insert("#p".into(), json!([agent_pubkey_hex]));
-    }
-
-    // since — on first subscribe use current time to skip history; on reconnect
-    // subtract skew buffer to catch events missed during the disconnect window.
     let since_ts = match since {
         Some(ts) => ts.saturating_sub(SINCE_SKEW_SECS),
         None => std::time::SystemTime::now()
@@ -3191,9 +3224,10 @@ async fn send_subscribe(
             .unwrap_or_default()
             .as_secs(),
     };
-    req_filter.insert("since".into(), json!(since_ts));
 
-    let req = json!(["REQ", sub_id, Value::Object(req_filter)]);
+    let filters = build_channel_req_filters(channel_id, agent_pubkey_hex, since_ts, filter);
+    let mut req = vec![json!("REQ"), json!(sub_id)];
+    req.extend(filters);
 
     match serde_json::to_string(&req) {
         Ok(text) => {
@@ -4370,7 +4404,51 @@ mod tests {
         ChannelFilter {
             kinds: Some(vec![9]),
             require_mention: false,
+            include_payment_receipts: false,
         }
+    }
+
+    #[test]
+    fn channel_req_or_filter_adds_payment_receipt_without_p_tag() {
+        use buzz_core::kind::KIND_PAYMENT_RECEIPT;
+        let channel_id = Uuid::new_v4();
+        let filter = ChannelFilter {
+            kinds: Some(vec![9, 40002]),
+            require_mention: true,
+            include_payment_receipts: true,
+        };
+        let filters = build_channel_req_filters(channel_id, "agentpk", 1_700_000_000, &filter);
+        assert_eq!(filters.len(), 2, "primary + receipt OR filter");
+        let primary = filters[0].as_object().expect("primary object");
+        assert!(primary.contains_key("#p"));
+        let receipt = filters[1].as_object().expect("receipt object");
+        assert_eq!(receipt.get("kinds"), Some(&json!([KIND_PAYMENT_RECEIPT])));
+        assert!(!receipt.contains_key("#p"), "receipts have no p tag");
+        assert_eq!(receipt.get("#h"), Some(&json!([channel_id.to_string()])));
+    }
+
+    #[test]
+    fn channel_req_skips_receipt_or_when_wallet_less() {
+        let channel_id = Uuid::new_v4();
+        let filter = ChannelFilter {
+            kinds: Some(vec![9]),
+            require_mention: true,
+            include_payment_receipts: false,
+        };
+        let filters = build_channel_req_filters(channel_id, "agentpk", 1, &filter);
+        assert_eq!(filters.len(), 1);
+    }
+
+    #[test]
+    fn channel_req_skips_receipt_or_for_wildcard_kinds() {
+        let channel_id = Uuid::new_v4();
+        let filter = ChannelFilter {
+            kinds: None,
+            require_mention: false,
+            include_payment_receipts: true,
+        };
+        let filters = build_channel_req_filters(channel_id, "agentpk", 1, &filter);
+        assert_eq!(filters.len(), 1, "wildcard already includes 40010");
     }
 
     fn seed_test_subscription(state: &mut BgState, channel_id: Uuid) {
@@ -4840,6 +4918,7 @@ mod tests {
         let filter = ChannelFilter {
             kinds: Some(vec![9]),
             require_mention: true,
+            include_payment_receipts: false,
         };
 
         apply_command_to_state(
@@ -4931,6 +5010,7 @@ mod tests {
                 filter: ChannelFilter {
                     kinds: Some(vec![9]),
                     require_mention: false,
+                    include_payment_receipts: false,
                 },
                 replay_since: Some(1_000),
             },
@@ -6045,6 +6125,7 @@ mod tests {
                 filter: ChannelFilter {
                     kinds: Some(vec![9]),
                     require_mention: false,
+                    include_payment_receipts: false,
                 },
                 replay_since: Some(1_000),
             },
@@ -6136,6 +6217,7 @@ mod tests {
                 filter: ChannelFilter {
                     kinds: Some(vec![9]),
                     require_mention: false,
+                    include_payment_receipts: false,
                 },
                 replay_since: None,
             },
@@ -6175,6 +6257,7 @@ mod tests {
                 filter: ChannelFilter {
                     kinds: Some(vec![9]),
                     require_mention: false,
+                    include_payment_receipts: false,
                 },
                 replay_since: None,
             },
@@ -6210,6 +6293,7 @@ mod tests {
                 filter: ChannelFilter {
                     kinds: Some(vec![9]),
                     require_mention: false,
+                    include_payment_receipts: false,
                 },
                 replay_since: None,
             },

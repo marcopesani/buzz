@@ -1515,6 +1515,22 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         sections.push(s);
     }
 
+    // 4a½. Payment-receipt wake: verify-first contract before the event body.
+    // Receipts are decorative; only `buzz wallet check` is settlement truth.
+    if let Some(be) = batch
+        .events
+        .iter()
+        .find(|e| e.prompt_tag == crate::payment_receipt::PAYMENT_RECEIPT_PROMPT_TAG)
+    {
+        let tags = crate::payment_receipt::event_tags_as_vecs(&be.event);
+        if let Ok(parsed) = buzz_core::payment::PaymentReceipt::from_tags(&tags) {
+            sections.push(crate::payment_receipt::receipt_wake_instruction(
+                &parsed.request_id,
+                &batch.channel_id,
+            ));
+        }
+    }
+
     // 4b. Event block(s).
     let event_section = if batch.events.len() == 1 {
         let be = &batch.events[0];
@@ -1890,6 +1906,45 @@ mod tests {
         assert!(prompt.contains("Event ID:"));
         // Should NOT contain "--- Event 1 ---" (that's the multi-event format).
         assert!(!prompt.contains("--- Event 1 ---"));
+    }
+
+    #[test]
+    fn test_format_prompt_payment_receipt_includes_verify_first_instruction() {
+        use buzz_core::kind::KIND_PAYMENT_RECEIPT;
+        use nostr::Tag;
+
+        let ch = Uuid::new_v4();
+        let request_id = "ab".repeat(32);
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(KIND_PAYMENT_RECEIPT as u16), "")
+            .tags([
+                Tag::parse(["h", &ch.to_string()]).unwrap(),
+                Tag::parse(["e", &request_id]).unwrap(),
+                Tag::parse(["payment_hash", &"a".repeat(64)]).unwrap(),
+                Tag::parse(["preimage", &"b".repeat(64)]).unwrap(),
+                Tag::parse(["amount", "50000"]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: crate::payment_receipt::PAYMENT_RECEIPT_PROMPT_TAG.into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
+        assert!(prompt.contains("[Payment receipt hint]"));
+        assert!(prompt.contains("proves NOTHING"));
+        assert!(prompt.contains(&format!(
+            "buzz wallet check --request {request_id} --channel {ch}"
+        )));
+        assert!(prompt.contains("[Buzz event: payment-receipt]"));
     }
 
     /// Helper: build a merged (cancel + re-prompt) batch with one cancelled

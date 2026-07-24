@@ -237,6 +237,10 @@ type MockBridgeOptions = {
   closeChannelLiveSubscriptionOnce?: boolean;
   /** Reject successive kind-9 sends with these messages, then resume. */
   sendMessageErrors?: string[];
+  /** Reject successive kind-40009 publishes with these messages, then resume. */
+  paymentRequestPublishErrors?: string[];
+  /** Reject successive kind-40010 publishes with these messages, then resume. */
+  paymentReceiptPublishErrors?: string[];
   /** Reject successive managed-agent starts, then resume. */
   startManagedAgentErrors?: string[];
   /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
@@ -433,6 +437,45 @@ type MockBridgeOptions = {
    * test can interleave edits and exercise the mid-save race handling.
    */
   globalConfigSaveDelayMs?: number;
+  /** Initial Lightning wallet mock status for U11 specs. */
+  walletStatus?: {
+    linked?: boolean;
+    capabilities?: string[];
+    receive_mode?: string;
+    lud16?: string | null;
+    balance_msat?: number | null;
+  };
+  /**
+   * Managed-agent NWC wallet mock for agent edit modal specs.
+   * Mid-test overrides via `window.__BUZZ_E2E_SET_AGENT_WALLET_MOCK__`.
+   */
+  agentWallet?: {
+    provisionedByPubkey?: Record<string, boolean>;
+    statusError?: string | null;
+    provisionError?: string | null;
+    stickyProvisionError?: boolean;
+  };
+  walletReceiveBolt11?: string;
+  /** Seconds until the mock receive invoice expires (default 3600). */
+  walletReceiveExpiresInSecs?: number;
+  walletConfirmOutcome?:
+    | { status: "settled"; preimage: string }
+    | { status: "failed"; reason: string }
+    | { status: "unknown" }
+    | { status: "already_claimed"; state: string };
+  walletCheckIncomingOutcome?:
+    | { status: "paid" }
+    | { status: "unpaid" }
+    | { status: "unconfirmable" }
+    | Array<
+        { status: "paid" } | { status: "unpaid" } | { status: "unconfirmable" }
+      >;
+  walletReconcileSettled?: Array<{
+    request_event_id: string;
+    payment_hash: string;
+    preimage: string | null;
+    amount_msat: number;
+  }>;
   /**
    * Override the `discover_agent_models` mock response. When set, the bridge
    * returns this catalog instead of the default per-harness model list.

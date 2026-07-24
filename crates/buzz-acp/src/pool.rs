@@ -529,6 +529,9 @@ pub struct PromptContext {
     /// the desktop keys per (agent, relay) pair, e.g. `session_config_captured`,
     /// mirroring the `managed_agent_runtime_lifecycle` frames.
     pub relay_url: String,
+    /// Whether this agent process has a provisioned NWC wallet (`BUZZ_NWC_URI`).
+    /// Gates the heartbeat wallet nudge (subscription/wake use `Config`).
+    pub wallet_provisioned: bool,
 }
 
 impl AgentPool {
@@ -5307,6 +5310,7 @@ mod tests {
             memory_enabled: false,
             harness_name: "goose".to_string(),
             relay_url: "ws://127.0.0.1:3000".to_string(),
+            wallet_provisioned: false,
         }
     }
 

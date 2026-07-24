@@ -76,8 +76,10 @@ pub async fn update_profile(
     let nip05 = nip05_handle
         .as_deref()
         .or_else(|| current.get("nip05").and_then(Value::as_str));
+    // Preserve published Lightning address across allowlist rebuilds.
+    let lud16 = current.get("lud16").and_then(Value::as_str);
 
-    let builder = events::build_profile(dn, name, picture, ab, nip05)?;
+    let builder = events::build_profile(dn, name, picture, ab, nip05, lud16)?;
     submit_event(builder, &state).await?;
 
     // Re-fetch to return canonical profile.
@@ -156,9 +158,10 @@ fn build_deferred_profile_event(
     let name = current.get("name").and_then(Value::as_str);
     let about = current.get("about").and_then(Value::as_str);
     let nip05 = current.get("nip05").and_then(Value::as_str);
+    let lud16 = current.get("lud16").and_then(Value::as_str);
 
     Ok(
-        events::build_profile(display_name, name, Some(avatar_url), about, nip05)?
+        events::build_profile(display_name, name, Some(avatar_url), about, nip05, lud16)?
             .custom_created_at(monotonic_created_at(
                 prior_event.map(|event| event.created_at.as_secs() as i64),
             )),
