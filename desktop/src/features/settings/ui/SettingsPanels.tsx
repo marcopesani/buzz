@@ -234,6 +234,7 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "wallet",
     label: "Wallet",
     icon: Wallet,
+    featureGate: "wallet",
   },
   {
     value: "updates",

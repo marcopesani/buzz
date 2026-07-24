@@ -137,6 +137,8 @@ type MessageComposerProps = {
       threadHeadId: string | null;
     } | null,
   ) => Promise<void>;
+  /** Optional V2 hook for the composer "Request payment" Zap control. */
+  onRequestPayment?: () => void;
   placeholder?: string;
   profiles?: UserProfileLookup;
   replyTarget?: {
@@ -169,6 +171,7 @@ function MessageComposerImpl({
   onEditSave,
   onPrepareSendChannel,
   onPreparingMentionSendChange,
+  onRequestPayment,
   onSend,
   placeholder,
   profiles,
@@ -1088,6 +1091,7 @@ function MessageComposerImpl({
               onLinkButton={linkEditor.openFromToolbar}
               onOpenMentionPicker={openMentionPicker}
               onPaperclip={handlePaperclipClick}
+              onRequestPayment={onRequestPayment}
               sendDisabled={sendDisabled}
             />
           </form>

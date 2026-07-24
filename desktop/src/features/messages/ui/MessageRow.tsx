@@ -31,6 +31,7 @@ import {
 import { PaymentRequestCard } from "@/features/wallet/PaymentRequestCard";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
 import { cn } from "@/shared/lib/cn";
+import { FeatureGate } from "@/shared/features";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
@@ -337,7 +338,11 @@ export const MessageRow = React.memo(
             />
           );
         case KIND_PAYMENT_REQUEST:
-          return <PaymentRequestCard message={message} />;
+          return (
+            <FeatureGate feature="wallet">
+              <PaymentRequestCard message={message} />
+            </FeatureGate>
+          );
         default:
           {
             const waveMessage = parseWaveMessageContent(message.body);

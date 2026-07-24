@@ -40,6 +40,14 @@
       "platforms": [
         "desktop"
       ]
+    },
+    {
+      "id": "wallet",
+      "name": "Lightning Wallet",
+      "description": "Link an external Lightning wallet (NWC) — send, receive, and request payments in chat",
+      "platforms": [
+        "desktop"
+      ]
     }
   ]
 }
