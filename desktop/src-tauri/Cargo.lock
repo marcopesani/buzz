@@ -1017,6 +1017,7 @@ dependencies = [
  "base64 0.22.1",
  "buzz-agent",
  "buzz-core",
+ "buzz-mock-wallet",
  "buzz-persona",
  "buzz-sdk",
  "buzz-wallet",
@@ -1078,6 +1079,8 @@ dependencies = [
  "tokio-tungstenite 0.29.0",
  "tokio-util",
  "toml 0.8.2",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "user-idle",
  "uuid",
@@ -1085,6 +1088,28 @@ dependencies = [
  "windows-sys 0.61.2",
  "zeroize",
  "zip 8.6.0",
+]
+
+[[package]]
+name = "buzz-mock-wallet"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "buzz-core",
+ "clap",
+ "futures-util",
+ "hex",
+ "lightning-invoice",
+ "nostr",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -103,6 +103,7 @@ export default defineConfig({
         "**/deep-link-invite.spec.ts",
         "**/invite-qr-download.spec.ts",
         "**/wallet-screenshots.spec.ts",
+        "**/wallet-live-fullscreen.spec.ts",
         "**/global-agent-config-screenshots.spec.ts",
         "**/doctor-states.spec.ts",
         "**/onboarding-avatar-skip.spec.ts",

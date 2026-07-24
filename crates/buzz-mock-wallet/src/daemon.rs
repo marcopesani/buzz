@@ -193,6 +193,7 @@ fn dispatch(
 ) -> Result<DispatchResult, MockWalletError> {
     let method = request.method;
     let method_str = method.as_str();
+    info!(method = method_str, "nwc rpc");
 
     if method == Method::PayInvoice {
         if let Some(code) = ledger.take_fail_next_pay_code() {

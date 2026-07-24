@@ -165,14 +165,7 @@ test("pay card states + receipt-before-request", async ({ page }) => {
 
   // Receipt BEFORE its request (order-independence).
   await page.evaluate(
-    ({
-      channelName,
-      receiptId,
-      requestId,
-      viewer,
-      kind,
-      createdAt,
-    }) => {
+    ({ channelName, receiptId, requestId, viewer, kind, createdAt }) => {
       window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName,
         content: "",

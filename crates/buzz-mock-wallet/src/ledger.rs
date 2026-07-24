@@ -27,6 +27,9 @@ pub struct TrackedInvoice {
     pub state: InvoiceState,
     /// Settlement time (unix seconds), if settled.
     pub settled_at: Option<u64>,
+    /// When true, paying this invoice credits the ledger after debit (self-pay
+    /// net-zero). When false, the debit sticks — payee is external.
+    pub credit_on_settle: bool,
 }
 
 /// Scriptable failure / timing knobs — data, not code paths in handlers.
@@ -108,6 +111,35 @@ impl Ledger {
             minted: minted.clone(),
             state: InvoiceState::Pending,
             settled_at: None,
+            credit_on_settle: true,
+        };
+        self.inner
+            .lock()
+            .invoices
+            .insert(minted.payment_hash_hex.clone(), tracked);
+        Ok(minted)
+    }
+
+    /// Mint a payee invoice: pay returns a verifying preimage and leaves the
+    /// debit in place (no self-pay credit).
+    pub fn make_payee_invoice(
+        &self,
+        amount_msat: u64,
+        description: &str,
+        expiry_secs: u64,
+    ) -> Result<MintedInvoice, MockWalletError> {
+        let preimage = random_32();
+        // Sign with a fresh key so the invoice is not the wallet's receive key,
+        // while still tracking the preimage for a verifying settle.
+        let foreign = Keys::generate();
+        let mut signing = [0u8; 32];
+        signing.copy_from_slice(foreign.secret_key().as_secret_bytes());
+        let minted = mint_bolt11(amount_msat, description, expiry_secs, &signing, preimage)?;
+        let tracked = TrackedInvoice {
+            minted: minted.clone(),
+            state: InvoiceState::Pending,
+            settled_at: None,
+            credit_on_settle: false,
         };
         self.inner
             .lock()
@@ -176,11 +208,12 @@ impl Ledger {
             let now = unix_now();
             inv.state = InvoiceState::Settled;
             inv.settled_at = Some(now);
+            let credit = inv.credit_on_settle;
             let outcome = PayOutcome {
                 preimage_hex: inv.minted.preimage_hex.clone(),
                 payment_hash_hex: hash,
                 amount_msat,
-                settled_ours: true,
+                settled_ours: credit,
                 bolt11: inv.minted.bolt11.clone(),
                 description: inv.minted.description.clone(),
                 created_at: inv.minted.created_at,
@@ -188,9 +221,11 @@ impl Ledger {
                 settled_at: now,
             };
             drop(inner);
-            // Re-lock to credit inbound settle (self-pay nets to zero).
-            let mut inner = self.inner.lock();
-            inner.balance_msat = inner.balance_msat.saturating_add(amount_msat);
+            if credit {
+                // Self-pay: credit inbound settle (nets to zero).
+                let mut inner = self.inner.lock();
+                inner.balance_msat = inner.balance_msat.saturating_add(amount_msat);
+            }
             return Ok(outcome);
         }
 

@@ -931,9 +931,52 @@ function updateMockRelayMembershipFromAdminEvent(event: RelayEvent): boolean {
   return false;
 }
 
+const WALLET_PROXY_COMMANDS = new Set([
+  "link_wallet",
+  "unlink_wallet",
+  "wallet_status",
+  "wallet_receive",
+  "wallet_prepare_send",
+  "wallet_confirm",
+  "wallet_cancel",
+  "wallet_reconcile",
+]);
+
+async function proxyWalletCommand(
+  baseUrl: string,
+  command: string,
+  payload: unknown,
+): Promise<unknown> {
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cmd: command, args: payload ?? {} }),
+  });
+  const body = (await response.json()) as {
+    ok?: boolean;
+    result?: unknown;
+    error?: string;
+  };
+  if (!response.ok || body.ok === false) {
+    throw new Error(body.error ?? `wallet proxy failed for ${command}`);
+  }
+  if (command === "wallet_confirm") {
+    window.__BUZZ_E2E_LAST_WALLET_CONFIRM__ = body.result;
+  }
+  return body.result ?? null;
+}
+
 declare global {
   interface Window {
     __BUZZ_E2E__?: E2eConfig;
+    /**
+     * When set (loopback harness base URL), wallet IPC is proxied to a live
+     * WalletRuntime + buzz-mock-wallet instead of scripted mock responses.
+     * Inject via addInitScript BEFORE installMockBridge.
+     */
+    __BUZZ_E2E_WALLET_PROXY__?: string;
+    /** Last wallet_confirm result when using the live wallet proxy. */
+    __BUZZ_E2E_LAST_WALLET_CONFIRM__?: unknown;
     __BUZZ_E2E_COMMANDS__?: string[];
     __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
       command: string;
@@ -9218,6 +9261,16 @@ export function maybeInstallE2eTauriMocks() {
       payload: loggedPayload,
     });
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
+
+    // One branch at the dispatch boundary: live harness vs scripted mocks.
+    const walletProxy = window.__BUZZ_E2E_WALLET_PROXY__;
+    if (
+      typeof walletProxy === "string" &&
+      walletProxy.length > 0 &&
+      WALLET_PROXY_COMMANDS.has(command)
+    ) {
+      return proxyWalletCommand(walletProxy, command, payload);
+    }
 
     switch (command) {
       case "get_builderlab_auth":

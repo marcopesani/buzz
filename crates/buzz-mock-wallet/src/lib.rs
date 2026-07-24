@@ -19,6 +19,7 @@ mod relay;
 pub use daemon::advertised_methods;
 pub use error::MockWalletError;
 pub use ledger::Script;
+pub use mint::MintedInvoice;
 
 use daemon::run_daemon;
 use ledger::Ledger;
@@ -125,7 +126,14 @@ impl MockWallet {
         // Give the daemon a moment to publish the 13194 info event.
         tokio::time::sleep(Duration::from_millis(70)).await;
 
-        info!(%uri, "buzz-mock-wallet ready (dev-only, moves no real money)");
+        // Never log the paste-ready URI — it embeds `secret=`. Standalone
+        // `main.rs` prints it to stdout for BUZZ_NWC_URI export; library
+        // callers (harness / tests) fetch via [`MockWallet::uri`].
+        info!(
+            wallet_pubkey = %wallet_pubkey,
+            relay = %relay_url,
+            "buzz-mock-wallet ready (dev-only, moves no real money; NWC URI not logged)"
+        );
 
         Ok(Self {
             uri,
@@ -168,6 +176,17 @@ impl MockWallet {
     /// Current ledger balance in millisatoshis.
     pub fn balance_msat(&self) -> u64 {
         self.ledger.balance_msat()
+    }
+
+    /// Mint a payee bolt11: paying it debits the ledger and returns a verifying
+    /// preimage (balance actually moves — not a self-pay net-zero).
+    pub fn mint_payee(
+        &self,
+        amount_msat: u64,
+        description: &str,
+    ) -> Result<MintedInvoice, MockWalletError> {
+        self.ledger
+            .make_payee_invoice(amount_msat, description, 3600)
     }
 
     /// Update scriptable failure / timing knobs after start.
