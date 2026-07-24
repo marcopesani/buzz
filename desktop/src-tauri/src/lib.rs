@@ -790,6 +790,7 @@ pub fn run() {
             create_managed_agent,
             provision_managed_agent_wallet,
             unprovision_managed_agent_wallet,
+            agent_wallet_status,
             start_managed_agent,
             stop_managed_agent,
             set_agent_managed_profiles,

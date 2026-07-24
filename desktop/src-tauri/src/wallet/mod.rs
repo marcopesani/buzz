@@ -13,10 +13,12 @@ mod runtime;
 mod secret_store;
 
 pub use agent_nwc::{
-    agent_nwc_blob_key, agent_nwc_os_backend, agent_nwc_redaction_extras,
+    agent_nwc_blob_key, agent_nwc_is_provisioned, agent_nwc_os_backend, agent_nwc_redaction_extras,
     agent_nwc_redaction_extras_for_pubkey, agent_nwc_spawn_uri, agent_nwc_timeouts,
-    load_agent_nwc_uri, provision_agent_nwc, unprovision_agent_nwc, validate_agent_receive_only,
-    AdvertisementProbe, AGENT_SPEND_METHODS,
+    agent_wallet_status_for, load_agent_nwc_uri, observe_agent_nwc_for_spawn,
+    observe_agent_nwc_uri, provision_agent_nwc, unprovision_agent_nwc, validate_agent_receive_only,
+    AdvertisementProbe, AgentNwcOpGates, AgentNwcSpawnObservation, AgentWalletStatus,
+    AGENT_SPEND_METHODS,
 };
 pub use error::map_wallet_error;
 pub use payment_store::JsonPaymentStore;

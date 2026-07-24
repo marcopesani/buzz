@@ -3,6 +3,9 @@
 //! One gate: probe advertisements, refuse spend-capable wallets, store the URI
 //! only at `agent-nwc:{pubkey}` in the keyring. Never writes to
 //! `managed-agents.json`. Refusal stores nothing.
+//!
+//! Provision/unprovision for a given pubkey is serialized via
+//! [`AgentNwcOpGates`] so probe + keyring write cannot interleave.
 
 use crate::wallet::secret_store::BlobBackend;
 use async_trait::async_trait;
@@ -10,7 +13,11 @@ use buzz_wallet_pkg::{
     Capabilities, NwcWalletConnector, WalletAdvertisement, WalletError, WalletMethod,
     WalletTimeouts,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 /// Spend methods that disqualify an agent wallet. Data — not an if-chain.
 pub const AGENT_SPEND_METHODS: &[WalletMethod] = &[
@@ -27,6 +34,104 @@ const AGENT_REQUIRED_METHODS: &[WalletMethod] =
 /// Keyring blob key for an agent's receive-only NWC URI.
 pub fn agent_nwc_blob_key(pubkey: &str) -> String {
     format!("agent-nwc:{pubkey}")
+}
+
+/// Per-pubkey gates so concurrent provision/unprovision for one agent cannot
+/// interleave probe + keyring write. Cross-agent ops stay concurrent.
+#[derive(Default)]
+pub struct AgentNwcOpGates {
+    inner: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl AgentNwcOpGates {
+    /// Empty gate map.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Acquire the exclusive gate for `pubkey` (hold across probe + store/delete).
+    pub async fn lock(&self, pubkey: &str) -> OwnedMutexGuard<()> {
+        let gate = {
+            let mut map = self.inner.lock().await;
+            Arc::clone(
+                map.entry(pubkey.to_string())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
+        };
+        gate.lock_owned().await
+    }
+}
+
+/// Keyring/config presence for a managed agent's NWC wallet — no network, no URI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentWalletStatus {
+    /// `true` when `agent-nwc:{pubkey}` holds a non-empty NWC URI.
+    pub provisioned: bool,
+}
+
+/// One keyring observation for spawn: URI for env injection + presence for hash.
+///
+/// By construction [`Self::provisioned`] == [`Self::uri`].is_some(). Callers
+/// MUST use this single value for both `BUZZ_NWC_URI` and `spawn_config_hash`
+/// so the stamped bit describes the same observation that decided the child env.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentNwcSpawnObservation {
+    /// Non-empty URI to inject, or `None` to clear inherited `BUZZ_NWC_URI`.
+    pub uri: Option<String>,
+    /// Presence bit for `spawn_config_hash` — always `uri.is_some()`.
+    pub provisioned: bool,
+}
+
+/// Resolve wallet status from keyring presence only (never probes NWC).
+///
+/// Propagates keyring load failures as `Err("agent_wallet_secret_unavailable")`
+/// so the UI can distinguish "no wallet" from "keyring unavailable".
+pub fn agent_wallet_status_for(
+    pubkey: &str,
+    backend: &dyn BlobBackend,
+) -> Result<AgentWalletStatus, String> {
+    let uri = observe_agent_nwc_uri(pubkey, backend)?;
+    Ok(AgentWalletStatus {
+        provisioned: uri.is_some(),
+    })
+}
+
+/// Honest keyring observe: `Ok(Some(uri))` / `Ok(None)` / `Err(unavailable)`.
+///
+/// Prefer this over [`agent_nwc_spawn_uri`], which fail-closes errors to `None`.
+pub fn observe_agent_nwc_uri(
+    pubkey: &str,
+    backend: &dyn BlobBackend,
+) -> Result<Option<String>, String> {
+    match load_agent_nwc_uri(pubkey, backend)? {
+        Some(uri) if !uri.is_empty() => Ok(Some(uri)),
+        _ => Ok(None),
+    }
+}
+
+/// Single spawn-time observation: fail-closed on keyring Err.
+///
+/// Policy: a load failure withholds the capability (`uri = None`,
+/// `provisioned = false`) rather than aborting spawn or inventing presence.
+/// The returned struct is the only input for both env injection and the hash
+/// stamp — never re-read the keyring for the stamp.
+pub fn observe_agent_nwc_for_spawn(
+    pubkey: &str,
+    backend: &dyn BlobBackend,
+) -> AgentNwcSpawnObservation {
+    // Fail-closed on load Err: withhold BUZZ_NWC_URI; stamp matches that decision.
+    let uri = observe_agent_nwc_uri(pubkey, backend).unwrap_or_default();
+    let provisioned = uri.is_some();
+    AgentNwcSpawnObservation { uri, provisioned }
+}
+
+/// `true` when a successful observe would inject `BUZZ_NWC_URI`.
+///
+/// Propagates keyring errors — do not use for IPC status (use
+/// [`agent_wallet_status_for`]) or for spawn stamping (use
+/// [`observe_agent_nwc_for_spawn`]).
+pub fn agent_nwc_is_provisioned(pubkey: &str, backend: &dyn BlobBackend) -> Result<bool, String> {
+    Ok(observe_agent_nwc_uri(pubkey, backend)?.is_some())
 }
 
 /// Probe both NWC info surfaces for agent provisioning.
@@ -115,15 +220,13 @@ pub fn load_agent_nwc_uri(
         .map_err(|_| "agent_wallet_secret_unavailable".to_string())
 }
 
-/// Spawn-env injection: `Some(uri)` when provisioned, `None` when absent.
+/// Spawn-env injection helper that **fail-closes** keyring errors to `None`.
 ///
-/// Callers set or remove `BUZZ_NWC_URI` from this result. Reserved-key
-/// stripping elsewhere prevents user env from overriding it.
+/// Prefer [`observe_agent_nwc_for_spawn`] at spawn sites so env + hash stamp
+/// share one observation. This collapsing helper remains for redaction/tests
+/// that only need a best-effort URI and must not surface keyring errors.
 pub fn agent_nwc_spawn_uri(pubkey: &str, backend: &dyn BlobBackend) -> Option<String> {
-    match load_agent_nwc_uri(pubkey, backend) {
-        Ok(Some(uri)) if !uri.is_empty() => Some(uri),
-        _ => None,
-    }
+    observe_agent_nwc_for_spawn(pubkey, backend).uri
 }
 
 /// Values that must be scrubbed from agent logs for a stored URI.
@@ -413,6 +516,87 @@ mod tests {
     #[test]
     fn blob_key_format() {
         assert_eq!(agent_nwc_blob_key("abc"), "agent-nwc:abc");
+    }
+
+    #[test]
+    fn status_unprovisioned_is_false() {
+        let backend = MapBlobBackend::new();
+        assert!(!agent_nwc_is_provisioned(PUBKEY, &backend).expect("load"));
+        assert_eq!(
+            agent_wallet_status_for(PUBKEY, &backend).expect("status"),
+            AgentWalletStatus { provisioned: false }
+        );
+    }
+
+    #[tokio::test]
+    async fn status_provisioned_is_true_after_store() {
+        let backend = MapBlobBackend::new();
+        let probe = FakeAdvertisementProbe::new();
+        probe.script_ok(receive_only_ads());
+        provision_agent_nwc(PUBKEY, URI, &probe, &backend)
+            .await
+            .expect("provision");
+        assert!(agent_nwc_is_provisioned(PUBKEY, &backend).expect("load"));
+        assert_eq!(
+            agent_wallet_status_for(PUBKEY, &backend).expect("status"),
+            AgentWalletStatus { provisioned: true }
+        );
+    }
+
+    /// Keyring load Err must surface — never collapse to provisioned=false.
+    #[test]
+    fn status_propagates_keyring_unavailable() {
+        struct FailBlob;
+        impl BlobBackend for FailBlob {
+            fn load(&self, _: &str) -> Result<Option<String>, String> {
+                Err("boom".into())
+            }
+            fn store(&self, _: &str, _: &str) -> Result<(), String> {
+                Err("boom".into())
+            }
+            fn delete(&self, _: &str) -> Result<(), String> {
+                Err("boom".into())
+            }
+        }
+        let err = agent_wallet_status_for(PUBKEY, &FailBlob).expect_err("must Err");
+        assert_eq!(err, "agent_wallet_secret_unavailable");
+    }
+
+    /// Defect-1 invariant: spawn observation's presence bit is exactly uri.is_some().
+    #[tokio::test]
+    async fn spawn_observation_presence_matches_uri_decision() {
+        let backend = MapBlobBackend::new();
+        let empty = observe_agent_nwc_for_spawn(PUBKEY, &backend);
+        assert_eq!(empty.provisioned, empty.uri.is_some());
+        assert!(!empty.provisioned);
+
+        let probe = FakeAdvertisementProbe::new();
+        probe.script_ok(receive_only_ads());
+        provision_agent_nwc(PUBKEY, URI, &probe, &backend)
+            .await
+            .expect("provision");
+        let provisioned = observe_agent_nwc_for_spawn(PUBKEY, &backend);
+        assert_eq!(provisioned.provisioned, provisioned.uri.is_some());
+        assert!(provisioned.provisioned);
+        assert_eq!(provisioned.uri.as_deref(), Some(URI));
+
+        // Fail-closed: load Err → no URI and provisioned=false (same decision).
+        struct FailBlob;
+        impl BlobBackend for FailBlob {
+            fn load(&self, _: &str) -> Result<Option<String>, String> {
+                Err("boom".into())
+            }
+            fn store(&self, _: &str, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn delete(&self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let failed = observe_agent_nwc_for_spawn(PUBKEY, &FailBlob);
+        assert_eq!(failed.provisioned, failed.uri.is_some());
+        assert!(!failed.provisioned);
+        assert!(failed.uri.is_none());
     }
 
     /// managed-agents.json must never gain the URI after provisioning.

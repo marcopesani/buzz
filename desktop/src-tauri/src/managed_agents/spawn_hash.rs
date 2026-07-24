@@ -21,6 +21,10 @@
 //!   change what runs.
 //! - Channel membership is not an input: agents pick up channel changes live
 //!   (#1468), never via restart.
+//! - Wallet presence is a spawn-identity bit: `BUZZ_NWC_URI` is injected from
+//!   the keyring at launch, so provision/unprovision must flip the hash and
+//!   the existing `needs_restart` badge. Callers pass a bool resolved from the
+//!   keyring (never the raw NWC URI — presence only, no recoverable secret).
 //!
 //! The hash never crosses a process or persistence boundary, so
 //! `DefaultHasher` (not stable across Rust releases) is sufficient.
@@ -63,13 +67,18 @@ pub(crate) fn effective_team_instructions(
 
 /// Digest the effective spawn configuration of `record` under the current
 /// `personas`, resolving a blank record relay against `workspace_relay`.
-/// Pure — no `AppHandle`, no disk, no keyring.
+///
+/// Pure — no `AppHandle`, no disk, no keyring. Callers resolve
+/// `wallet_provisioned` from a single spawn observation
+/// ([`crate::wallet::observe_agent_nwc_for_spawn`]) and pass the bit; the raw
+/// NWC URI never enters the hasher.
 pub(crate) fn spawn_config_hash(
     record: &ManagedAgentRecord,
     personas: &[AgentDefinition],
     teams: &[TeamRecord],
     workspace_relay: &str,
     global: &GlobalAgentConfig,
+    wallet_provisioned: bool,
 ) -> u64 {
     // Prospective re-snapshot: apply the same `apply_persona_snapshot` the
     // start/restore paths run right before spawning, so the hash covers what a
@@ -132,7 +141,41 @@ pub(crate) fn spawn_config_hash(
     record.max_turn_duration_seconds.hash(&mut hasher);
     record.parallelism.hash(&mut hasher);
 
+    // Receive-only NWC presence (keyring `agent-nwc:{pubkey}` → `BUZZ_NWC_URI`).
+    // Bool only — never the URI. Provision/unprovision flips needs_restart.
+    wallet_provisioned.hash(&mut hasher);
+
     hasher.finish()
+}
+
+/// Whether a stamped spawn hash has drifted from current effective config.
+///
+/// `wallet_provisioned` is `Ok(bit)` from a successful keyring observe, or
+/// `Err(_)` when the keyring is unavailable. On `Err`, drift is non-flapping:
+/// badge only if the stamp matches **neither** presence polarity (i.e. some
+/// non-wallet input changed). Transient secret-store failures must not flip
+/// `needs_restart` by themselves.
+pub(crate) fn spawn_config_has_drifted(
+    stamped_hash: u64,
+    record: &ManagedAgentRecord,
+    personas: &[AgentDefinition],
+    teams: &[TeamRecord],
+    workspace_relay: &str,
+    global: &GlobalAgentConfig,
+    wallet_provisioned: Result<bool, String>,
+) -> bool {
+    match wallet_provisioned {
+        Ok(bit) => {
+            stamped_hash != spawn_config_hash(record, personas, teams, workspace_relay, global, bit)
+        }
+        Err(_) => {
+            let with_wallet =
+                spawn_config_hash(record, personas, teams, workspace_relay, global, true);
+            let without_wallet =
+                spawn_config_hash(record, personas, teams, workspace_relay, global, false);
+            stamped_hash != with_wallet && stamped_hash != without_wallet
+        }
+    }
 }
 
 #[cfg(test)]

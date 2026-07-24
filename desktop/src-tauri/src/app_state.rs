@@ -46,6 +46,9 @@ pub struct AppState {
     pub managed_agent_runtime_transition: Mutex<()>,
     pub managed_agents_store_lock: Mutex<()>,
     pub channel_templates_store_lock: Mutex<()>,
+    /// Per-pubkey serialization for managed-agent NWC provision/unprovision
+    /// (probe + keyring). Cross-agent ops stay concurrent.
+    pub agent_nwc_op_gates: crate::wallet::AgentNwcOpGates,
     pub managed_agent_processes: Mutex<HashMap<ManagedAgentRuntimeKey, ManagedAgentPairRuntime>>,
     pub huddle_state: Mutex<HuddleState>,
     /// Tauri app handle — stored after setup so huddle commands can emit
@@ -208,6 +211,7 @@ pub fn build_app_state() -> AppState {
         identity_mutation: Mutex::new(()),
         managed_agents_store_lock: Mutex::new(()),
         channel_templates_store_lock: Mutex::new(()),
+        agent_nwc_op_gates: crate::wallet::AgentNwcOpGates::new(),
         managed_agent_processes: Mutex::new(HashMap::new()),
         session_config_cache: Mutex::new(HashMap::new()),
         huddle_state: Mutex::new(HuddleState::default()),

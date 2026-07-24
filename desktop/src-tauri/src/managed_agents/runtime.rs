@@ -1461,14 +1461,22 @@ pub fn build_managed_agent_summary(
             let global_for_hash =
                 crate::managed_agents::load_global_agent_config(app).unwrap_or_default();
             let teams_for_hash = crate::managed_agents::load_teams(app).unwrap_or_default();
-            let hash_drift = runtime.spawn_config_hash
-                != crate::managed_agents::spawn_hash::spawn_config_hash(
-                    record,
-                    personas,
-                    &teams_for_hash,
-                    &key.relay_url,
-                    &global_for_hash,
-                );
+            // Wallet presence for drift: successful keyring reads use live
+            // presence; load Err is non-flapping (see spawn_config_has_drifted).
+            let wallet_for_drift = crate::wallet::observe_agent_nwc_uri(
+                &record.pubkey,
+                &crate::wallet::agent_nwc_os_backend(),
+            )
+            .map(|uri| uri.is_some());
+            let hash_drift = crate::managed_agents::spawn_hash::spawn_config_has_drifted(
+                runtime.spawn_config_hash,
+                record,
+                personas,
+                &teams_for_hash,
+                &key.relay_url,
+                &global_for_hash,
+                wallet_for_drift,
+            );
             let availability_drift = super::availability_drift(
                 runtime.adapter_availability.as_ref(),
                 super::adapter_availability_cached(),
@@ -1910,10 +1918,16 @@ pub fn spawn_agent_child(
         command.env_remove("BUZZ_AUTH_TAG");
     }
 
-    // Receive-only NWC URI from keyring (`agent-nwc:{pubkey}`). Reserved —
-    // user env cannot override. Absent when unprovisioned (clear inherited).
-    match crate::wallet::agent_nwc_spawn_uri(&record.pubkey, &crate::wallet::agent_nwc_os_backend())
-    {
+    // Receive-only NWC: ONE keyring observation drives env injection AND the
+    // spawn-hash stamp below. Never re-read for the stamp (TOCTOU: concurrent
+    // unprovision between two reads would leave the child with a URI while
+    // stamping provisioned=false and hiding needs_restart). Fail-closed on
+    // keyring Err — withhold capability; stamp matches that decision.
+    let agent_nwc = crate::wallet::observe_agent_nwc_for_spawn(
+        &record.pubkey,
+        &crate::wallet::agent_nwc_os_backend(),
+    );
+    match &agent_nwc.uri {
         Some(nwc_uri) => {
             command.env("BUZZ_NWC_URI", nwc_uri);
         }
@@ -2042,13 +2056,15 @@ pub fn spawn_agent_child(
     // Stamp the effective spawn config so the summary builder can flag
     // needs_restart when disk state drifts from what this process runs.
     // `effective_relay_url` is already resolved, and resolution is idempotent,
-    // so it serves as the workspace-relay input here.
+    // so it serves as the workspace-relay input here. Wallet bit is the same
+    // `agent_nwc` observation used for `BUZZ_NWC_URI` above — never a second read.
     let spawn_config_hash = super::spawn_hash::spawn_config_hash(
         record,
         &personas,
         &teams,
         &effective_relay_url,
         &global,
+        agent_nwc.provisioned,
     );
 
     // Stamp the adapter availability for runtimes with a version gate (codex
