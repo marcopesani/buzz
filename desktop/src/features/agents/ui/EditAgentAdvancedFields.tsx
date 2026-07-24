@@ -10,11 +10,15 @@ import {
 import type { AgentPersona } from "@/shared/api/types";
 import { BuzzAgentModelTuningFields } from "./buzzAgentModelTuningFields";
 import { isBuzzAgentRuntime } from "./buzzAgentConfig";
+import { AgentWalletBlock } from "./AgentWalletBlock";
 
 export function EditAgentAdvancedFields({
   acpCommand,
   agentArgs,
   agentCommand,
+  agentPubkey,
+  agentRunning,
+  agentWorking,
   autoRestartOnConfigChange,
   disabled,
   envVars,
@@ -26,6 +30,7 @@ export function EditAgentAdvancedFields({
   linkedPersona,
   model,
   modelTuningRuntimeId,
+  needsRestart,
   parallelism,
   provider,
   requiredEnvKeys,
@@ -38,11 +43,15 @@ export function EditAgentAdvancedFields({
   onInheritHarnessChange,
   onParallelismChange,
   onAutoRestartChange,
+  onRestartAgent,
   onSystemPromptChange,
 }: {
   acpCommand: string;
   agentArgs: string;
   agentCommand: string;
+  agentPubkey: string;
+  agentRunning: boolean;
+  agentWorking: boolean;
   autoRestartOnConfigChange: boolean;
   disabled: boolean;
   envVars: EnvVarsValue;
@@ -61,6 +70,7 @@ export function EditAgentAdvancedFields({
    * EditAgentDialog — the resolved runtime, not the "inherit"/"custom" sentinel.
    */
   modelTuningRuntimeId: string;
+  needsRestart: boolean;
   parallelism: string;
   /** Active LLM provider id — forwarded to BuzzAgentModelTuningFields for effort filtering. */
   provider?: string;
@@ -74,6 +84,7 @@ export function EditAgentAdvancedFields({
   onInheritHarnessChange: (value: boolean) => void;
   onParallelismChange: (value: string) => void;
   onAutoRestartChange: (value: boolean) => void;
+  onRestartAgent: () => void;
   onSystemPromptChange: (value: string) => void;
 }) {
   return (
@@ -304,6 +315,15 @@ export function EditAgentAdvancedFields({
           provider={provider}
         />
       ) : null}
+
+      <AgentWalletBlock
+        agentPubkey={agentPubkey}
+        agentRunning={agentRunning}
+        agentWorking={agentWorking}
+        disabled={disabled}
+        needsRestart={needsRestart}
+        onRestart={onRestartAgent}
+      />
     </div>
   );
 }

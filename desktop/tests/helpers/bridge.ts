@@ -445,6 +445,16 @@ type MockBridgeOptions = {
     lud16?: string | null;
     balance_msat?: number | null;
   };
+  /**
+   * Managed-agent NWC wallet mock for agent edit modal specs.
+   * Mid-test overrides via `window.__BUZZ_E2E_SET_AGENT_WALLET_MOCK__`.
+   */
+  agentWallet?: {
+    provisionedByPubkey?: Record<string, boolean>;
+    statusError?: string | null;
+    provisionError?: string | null;
+    stickyProvisionError?: boolean;
+  };
   walletReceiveBolt11?: string;
   /** Seconds until the mock receive invoice expires (default 3600). */
   walletReceiveExpiresInSecs?: number;

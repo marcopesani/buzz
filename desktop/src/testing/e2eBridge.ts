@@ -410,6 +410,25 @@ type E2eConfig = {
       lud16?: string | null;
       balance_msat?: number | null;
     };
+    /**
+     * Managed-agent NWC wallet mock. Specs override via
+     * `__BUZZ_E2E_SET_AGENT_WALLET_MOCK__` for mid-test probe/keyring outcomes.
+     */
+    agentWallet?: {
+      /** Initial provisioned map keyed by agent pubkey. */
+      provisionedByPubkey?: Record<string, boolean>;
+      /**
+       * When set, `agent_wallet_status` throws this string (e.g.
+       * `agent_wallet_secret_unavailable`).
+       */
+      statusError?: string | null;
+      /**
+       * When set, the next `provision_managed_agent_wallet` throws this
+       * string (cleared after one failure unless `stickyProvisionError`).
+       */
+      provisionError?: string | null;
+      stickyProvisionError?: boolean;
+    };
     /** bolt11 returned by wallet_receive (wrapped in ReceiveInvoice shape). */
     walletReceiveBolt11?: string;
     /** Seconds until the mock receive invoice expires (default 3600). */
@@ -1124,6 +1143,12 @@ declare global {
     __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (state: ConnectionState) => void;
     __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => ConnectionState;
     __BUZZ_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
+    __BUZZ_E2E_SET_AGENT_WALLET_MOCK__?: (next: {
+      provisionedByPubkey?: Record<string, boolean>;
+      statusError?: string | null;
+      provisionError?: string | null;
+      stickyProvisionError?: boolean;
+    }) => void;
     __BUZZ_E2E_DISCONNECT_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_RESTART_MOCK_WEBSOCKETS__?: () => number;
     __BUZZ_E2E_SET_MESH__?: (mesh: {
@@ -2964,10 +2989,51 @@ function resetMockWallet(config: E2eConfig | undefined) {
   mockWalletState.reconcileSettled = config?.mock?.walletReconcileSettled ?? [];
   mockWalletState.handles.clear();
 }
+
+const mockAgentWalletState: {
+  provisionedByPubkey: Map<string, boolean>;
+  statusError: string | null;
+  provisionError: string | null;
+  stickyProvisionError: boolean;
+} = {
+  provisionedByPubkey: new Map(),
+  statusError: null,
+  provisionError: null,
+  stickyProvisionError: false,
+};
+
+function resetMockAgentWallet(config: E2eConfig | undefined) {
+  mockAgentWalletState.provisionedByPubkey.clear();
+  const seed = config?.mock?.agentWallet;
+  for (const [pubkey, provisioned] of Object.entries(
+    seed?.provisionedByPubkey ?? {},
+  )) {
+    mockAgentWalletState.provisionedByPubkey.set(pubkey, provisioned);
+  }
+  mockAgentWalletState.statusError = seed?.statusError ?? null;
+  mockAgentWalletState.provisionError = seed?.provisionError ?? null;
+  mockAgentWalletState.stickyProvisionError =
+    seed?.stickyProvisionError ?? false;
+}
+
+function markAgentNeedsRestartIfRunning(pubkey: string) {
+  const agent = mockManagedAgents.find((row) => row.pubkey === pubkey);
+  if (!agent) return;
+  if (agent.status === "running" || agent.status === "deployed") {
+    agent.needs_restart = true;
+  }
+}
 let mockPersonas: RawPersona[] = [];
 let mockTeams: RawTeam[] = [];
 // Listeners registered via the mock __TAURI_INTERNALS__.listen — keyed by event name.
 const tauriEventListeners = new Map<string, Set<() => void>>();
+
+function emitAgentsDataChanged() {
+  for (const cb of tauriEventListeners.get("agents-data-changed") ?? []) {
+    cb();
+  }
+}
+
 const openedExternalUrls: string[] = [];
 const defaultMockRelayAgents: RawRelayAgent[] = [
   {
@@ -9126,6 +9192,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockWorkflows();
   resetMockMesh();
   resetMockWallet(config);
+  resetMockAgentWallet(config);
   resetMockUserStatuses();
   resetMockSaveSubscriptions(config);
   resetMockPendingCommunityDeepLinks(config);
@@ -9136,6 +9203,24 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
   window.__BUZZ_E2E_WEBVIEW_ZOOM__ = 1;
+  window.__BUZZ_E2E_SET_AGENT_WALLET_MOCK__ = (next) => {
+    if (next.provisionedByPubkey) {
+      for (const [pubkey, provisioned] of Object.entries(
+        next.provisionedByPubkey,
+      )) {
+        mockAgentWalletState.provisionedByPubkey.set(pubkey, provisioned);
+      }
+    }
+    if (next.statusError !== undefined) {
+      mockAgentWalletState.statusError = next.statusError;
+    }
+    if (next.provisionError !== undefined) {
+      mockAgentWalletState.provisionError = next.provisionError;
+    }
+    if (next.stickyProvisionError !== undefined) {
+      mockAgentWalletState.stickyProvisionError = next.stickyProvisionError;
+    }
+  };
   window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
@@ -11200,6 +11285,61 @@ export function maybeInstallE2eTauriMocks() {
           throw new Error("not_linked");
         }
         return { ...mockWalletState.checkIncomingOutcome };
+      }
+      case "agent_wallet_status": {
+        const { pubkey } = (payload ?? {}) as { pubkey?: string };
+        if (!pubkey?.trim()) {
+          throw new Error("agent pubkey is required");
+        }
+        if (mockAgentWalletState.statusError) {
+          throw new Error(mockAgentWalletState.statusError);
+        }
+        return {
+          provisioned:
+            mockAgentWalletState.provisionedByPubkey.get(pubkey) ?? false,
+        };
+      }
+      case "provision_managed_agent_wallet": {
+        const { pubkey, uri } = (payload ?? {}) as {
+          pubkey?: string;
+          uri?: string;
+        };
+        if (!pubkey?.trim()) {
+          throw new Error("agent pubkey is required");
+        }
+        if (!uri?.trim()) {
+          throw new Error("nwc uri is required");
+        }
+        if (!mockManagedAgents.some((agent) => agent.pubkey === pubkey)) {
+          throw new Error(`agent ${pubkey} not found`);
+        }
+        if (mockAgentWalletState.provisionError) {
+          const message = mockAgentWalletState.provisionError;
+          if (!mockAgentWalletState.stickyProvisionError) {
+            mockAgentWalletState.provisionError = null;
+          }
+          throw new Error(message);
+        }
+        if (!uri.startsWith("nostr+walletconnect://")) {
+          throw new Error("invalid_uri");
+        }
+        mockAgentWalletState.provisionedByPubkey.set(pubkey, true);
+        markAgentNeedsRestartIfRunning(pubkey);
+        emitAgentsDataChanged();
+        return null;
+      }
+      case "unprovision_managed_agent_wallet": {
+        const { pubkey } = (payload ?? {}) as { pubkey?: string };
+        if (!pubkey?.trim()) {
+          throw new Error("agent pubkey is required");
+        }
+        if (!mockManagedAgents.some((agent) => agent.pubkey === pubkey)) {
+          throw new Error(`agent ${pubkey} not found`);
+        }
+        mockAgentWalletState.provisionedByPubkey.set(pubkey, false);
+        markAgentNeedsRestartIfRunning(pubkey);
+        emitAgentsDataChanged();
+        return null;
       }
       case "plugin:window|is_fullscreen":
         return false;

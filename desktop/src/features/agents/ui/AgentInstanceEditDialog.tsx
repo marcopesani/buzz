@@ -4,15 +4,20 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { toast } from "sonner";
 
+import { useAgentWorking } from "@/features/agents/agentWorkingSignal";
 import {
   useAcpRuntimesQuery,
   useAgentConfigSurface,
   useBakedBuildEnvKeysQuery,
   usePersonasQuery,
   useStartManagedAgentMutation,
+  useStopManagedAgentMutation,
   useUpdateManagedAgentMutation,
 } from "@/features/agents/hooks";
-import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
+import {
+  isManagedAgentActive,
+  respawnManagedAgentWithRules,
+} from "@/features/agents/lib/managedAgentControlActions";
 import type {
   ManagedAgent,
   RespondToMode,
@@ -107,9 +112,11 @@ export function AgentInstanceEditDialog({
 }) {
   const updateMutation = useUpdateManagedAgentMutation();
   const startMutation = useStartManagedAgentMutation();
+  const stopMutation = useStopManagedAgentMutation();
   const runtimesQuery = useAcpRuntimesQuery({ enabled: open });
   const configSurfaceQuery = useAgentConfigSurface(open ? agent.pubkey : null);
   const runtimes = runtimesQuery.data ?? [];
+  const agentWorking = useAgentWorking(agent.pubkey);
 
   const [name, setName] = React.useState(agent.name);
   const [aiDefaultsOpen, setAiDefaultsOpen] = React.useState(false);
@@ -1130,6 +1137,9 @@ export function AgentInstanceEditDialog({
                       acpCommand={acpCommand}
                       agentArgs={agentArgs}
                       agentCommand={agentCommand}
+                      agentPubkey={agent.pubkey}
+                      agentRunning={isManagedAgentActive(agent)}
+                      agentWorking={agentWorking.working}
                       autoRestartOnConfigChange={autoRestartOnConfigChange}
                       disabled={updateMutation.isPending}
                       envVars={envVars}
@@ -1147,6 +1157,7 @@ export function AgentInstanceEditDialog({
                       linkedPersona={linkedPersona}
                       model={inheritedSubmission.model ?? ""}
                       modelTuningRuntimeId={prospectiveRuntimeId}
+                      needsRestart={agent.needsRestart}
                       parallelism={parallelism}
                       provider={effectiveProvider}
                       requiredEnvKeys={advancedRequiredEnvKeys}
@@ -1159,6 +1170,24 @@ export function AgentInstanceEditDialog({
                       onEnvVarsChange={setEnvVars}
                       onInheritHarnessChange={setInheritHarness}
                       onParallelismChange={setParallelism}
+                      onRestartAgent={() => {
+                        const name = agent.name;
+                        void respawnManagedAgentWithRules({
+                          agent,
+                          startManagedAgent: (pubkey) =>
+                            startMutation.mutateAsync(pubkey),
+                          stopManagedAgent: (pubkey) =>
+                            stopMutation.mutateAsync(pubkey),
+                        })
+                          .then(() => toast.success(`Restarted ${name}.`))
+                          .catch((error) =>
+                            toast.error(
+                              error instanceof Error
+                                ? error.message
+                                : "Agent restart failed.",
+                            ),
+                          );
+                      }}
                       onSystemPromptChange={setSystemPrompt}
                     />
                   </motion.div>
