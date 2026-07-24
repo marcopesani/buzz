@@ -223,6 +223,8 @@ type E2eConfig = {
     closeChannelLiveSubscriptionOnce?: boolean;
     /** Reject successive kind-9 sends with these messages, then resume. */
     sendMessageErrors?: string[];
+    /** Reject successive kind-40009 publishes with these messages, then resume. */
+    paymentRequestPublishErrors?: string[];
     /** Reject successive managed-agent starts, then resume. */
     startManagedAgentErrors?: string[];
     /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
@@ -408,6 +410,8 @@ type E2eConfig = {
     };
     /** bolt11 returned by wallet_receive (wrapped in ReceiveInvoice shape). */
     walletReceiveBolt11?: string;
+    /** Seconds until the mock receive invoice expires (default 3600). */
+    walletReceiveExpiresInSecs?: number;
     /** Confirm outcome for wallet_confirm (default settled). */
     walletConfirmOutcome?:
       | { status: "settled"; preimage: string }
@@ -2869,6 +2873,7 @@ type MockWalletStatus = {
 const mockWalletState: {
   status: MockWalletStatus;
   receiveBolt11: string;
+  receiveExpiresInSecs: number;
   confirmOutcome:
     | { status: "settled"; preimage: string }
     | { status: "failed"; reason: string }
@@ -2904,6 +2909,7 @@ const mockWalletState: {
   },
   receiveBolt11:
     "lnbc210n1pmockinvoice000000000000000000000000000000000000000000000000000",
+  receiveExpiresInSecs: 3600,
   confirmOutcome: {
     status: "settled",
     preimage: "ab".repeat(32),
@@ -2937,7 +2943,10 @@ function resetMockWallet(config: E2eConfig | undefined) {
     };
   }
   mockWalletState.receiveBolt11 =
-    config?.mock?.walletReceiveBolt11 ?? mockWalletState.receiveBolt11;
+    config?.mock?.walletReceiveBolt11 ??
+    "lnbc210n1pmockinvoice000000000000000000000000000000000000000000000000000";
+  mockWalletState.receiveExpiresInSecs =
+    config?.mock?.walletReceiveExpiresInSecs ?? 3600;
   mockWalletState.confirmOutcome = config?.mock?.walletConfirmOutcome ?? {
     status: "settled",
     preimage: "ab".repeat(32),
@@ -9024,6 +9033,20 @@ function sendToMockSocket(args: {
       return;
     }
 
+    const paymentRequestPublishError =
+      event.kind === 40009
+        ? getConfig()?.mock?.paymentRequestPublishErrors?.shift()
+        : null;
+    if (paymentRequestPublishError) {
+      sendWsText(socket.handler, [
+        "OK",
+        event.id,
+        false,
+        paymentRequestPublishError,
+      ]);
+      return;
+    }
+
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     sendWsText(socket.handler, ["OK", event.id, true, ""]);
@@ -11064,7 +11087,9 @@ export function maybeInstallE2eTauriMocks() {
         return {
           bolt11: mockWalletState.receiveBolt11,
           payment_hash: "cd".repeat(32),
-          expires_at_unix: Math.floor(Date.now() / 1000) + 3600,
+          expires_at_unix:
+            Math.floor(Date.now() / 1000) +
+            mockWalletState.receiveExpiresInSecs,
         };
       }
       case "wallet_prepare_send": {

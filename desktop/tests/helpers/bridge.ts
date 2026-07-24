@@ -237,6 +237,8 @@ type MockBridgeOptions = {
   closeChannelLiveSubscriptionOnce?: boolean;
   /** Reject successive kind-9 sends with these messages, then resume. */
   sendMessageErrors?: string[];
+  /** Reject successive kind-40009 publishes with these messages, then resume. */
+  paymentRequestPublishErrors?: string[];
   /** Reject successive managed-agent starts, then resume. */
   startManagedAgentErrors?: string[];
   /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
@@ -442,6 +444,8 @@ type MockBridgeOptions = {
     balance_msat?: number | null;
   };
   walletReceiveBolt11?: string;
+  /** Seconds until the mock receive invoice expires (default 3600). */
+  walletReceiveExpiresInSecs?: number;
   walletConfirmOutcome?:
     | { status: "settled"; preimage: string }
     | { status: "failed"; reason: string }
