@@ -31,8 +31,19 @@ const BIND_HOST: &str = "127.0.0.1";
 const BIND_PORT: u16 = 4189;
 const COMMUNITY_ID: &str = "e2e-wallet";
 const STARTING_BALANCE_MSAT: u64 = 100_000_000;
+
+/// Where the paste-ready URI and payee invoices come from.
+///
+/// `Real` (opted into with `BUZZ_NWC_URI`) points at an operator-provided
+/// wallet; payee invoices are minted from that same wallet via the runtime,
+/// so a paid invoice is a genuine self-payment — real preimage, net-zero cost.
+enum Payee {
+    Mock(MockWallet),
+    Real { uri: String },
+}
+
 struct HarnessState {
-    mock: MockWallet,
+    payee: Payee,
     runtime: WalletRuntime,
     /// Keep tempdir alive for the process lifetime.
     _data_dir: TempDir,
@@ -101,7 +112,38 @@ async fn options_ok() -> Response {
 
 async fn get_uri(State(state): State<Arc<Mutex<HarnessState>>>) -> Response {
     let guard = state.lock().await;
-    cors_headers(Json(json!({ "uri": guard.mock.uri() })).into_response())
+    let uri = match &guard.payee {
+        Payee::Mock(mock) => mock.uri().to_string(),
+        Payee::Real { uri } => uri.clone(),
+    };
+    cors_headers(Json(json!({ "uri": uri })).into_response())
+}
+
+/// Mint a payee invoice: from the embedded mock, or (real mode) from the
+/// linked wallet itself, making the subsequent pay a self-payment.
+async fn mint_payee(
+    state: &HarnessState,
+    amount_msat: u64,
+    description: &str,
+) -> Result<(String, String), String> {
+    match &state.payee {
+        Payee::Mock(mock) => {
+            let minted = mock
+                .mint_payee(amount_msat, description)
+                .map_err(|e| e.to_string())?;
+            Ok((minted.bolt11, minted.payment_hash_hex))
+        }
+        Payee::Real { .. } => {
+            let bolt11 = state
+                .runtime
+                .receive(amount_msat, Some(description))
+                .await?;
+            let hash =
+                buzz_wallet_pkg::payment_hash_hex(&buzz_wallet_pkg::Bolt11::new(bolt11.clone()))
+                    .map_err(|e| e.to_string())?;
+            Ok((bolt11, hash))
+        }
+    }
 }
 
 async fn post_mint(
@@ -110,21 +152,17 @@ async fn post_mint(
 ) -> Response {
     let guard = state.lock().await;
     let description = body.description.unwrap_or_else(|| "e2e-payee".to_string());
-    match guard.mock.mint_payee(body.amount_msat, &description) {
-        Ok(minted) => cors_headers(
+    match mint_payee(&guard, body.amount_msat, &description).await {
+        Ok((bolt11, payment_hash)) => cors_headers(
             Json(json!({
-                "bolt11": minted.bolt11,
-                "payment_hash": minted.payment_hash_hex,
+                "bolt11": bolt11,
+                "payment_hash": payment_hash,
             }))
             .into_response(),
         ),
-        Err(err) => cors_headers(
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": err.to_string() })),
-            )
-                .into_response(),
-        ),
+        Err(err) => {
+            cors_headers((StatusCode::BAD_REQUEST, Json(json!({ "error": err }))).into_response())
+        }
     }
 }
 
@@ -234,6 +272,9 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Dependencies enable both rustls providers; choose one before any TLS
+    // (wss://) connection — mirrors the app's install_crypto_provider().
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -243,22 +284,35 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let data_dir = TempDir::new()?;
-    let mock = MockWallet::start(MockWalletConfig {
-        balance_msat: STARTING_BALANCE_MSAT,
-        ..Default::default()
-    })
-    .await?;
     // Spec fetches the paste-ready URI from GET /uri — never log it (embeds secret).
-    info!(
-        wallet_pubkey = mock.wallet_pubkey(),
-        relay = mock.relay_url(),
-        balance_msat = STARTING_BALANCE_MSAT,
-        "mock wallet ready (NWC URI not logged)"
-    );
+    // Real mode requires the explicit flag: a merely-exported BUZZ_NWC_URI (common
+    // for CLI use) must not silently move real money in the mock-wallet specs.
+    let payee = if std::env::var("BUZZ_HARNESS_REAL_WALLET").as_deref() == Ok("1") {
+        let uri = std::env::var("BUZZ_NWC_URI")
+            .ok()
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty())
+            .ok_or("BUZZ_HARNESS_REAL_WALLET=1 requires BUZZ_NWC_URI")?;
+        info!("real wallet mode: BUZZ_NWC_URI set (URI not logged)");
+        Payee::Real { uri }
+    } else {
+        let mock = MockWallet::start(MockWalletConfig {
+            balance_msat: STARTING_BALANCE_MSAT,
+            ..Default::default()
+        })
+        .await?;
+        info!(
+            wallet_pubkey = mock.wallet_pubkey(),
+            relay = mock.relay_url(),
+            balance_msat = STARTING_BALANCE_MSAT,
+            "mock wallet ready (NWC URI not logged)"
+        );
+        Payee::Mock(mock)
+    };
 
     let runtime = build_runtime(data_dir.path())?;
     let state = Arc::new(Mutex::new(HarnessState {
-        mock,
+        payee,
         runtime,
         _data_dir: data_dir,
     }));

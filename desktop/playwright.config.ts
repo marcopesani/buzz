@@ -104,6 +104,7 @@ export default defineConfig({
         "**/invite-qr-download.spec.ts",
         "**/wallet-screenshots.spec.ts",
         "**/wallet-live-fullscreen.spec.ts",
+        "**/wallet-real-money.spec.ts",
         "**/global-agent-config-screenshots.spec.ts",
         "**/doctor-states.spec.ts",
         "**/onboarding-avatar-skip.spec.ts",

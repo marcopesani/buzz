@@ -31,6 +31,7 @@ pub use adapters::{
     map_nip47_error_code, parse_nwc_uri, HttpLnurlResolver, NwcWalletConnector, NwcWalletService,
     ParsedNwcUri,
 };
+pub use bolt11::payment_hash_hex;
 pub use error::WalletError;
 pub use ports::{
     Clock, LnurlResolver, PaymentStore, ProfilePublisher, SecretStore, WalletConnector,
