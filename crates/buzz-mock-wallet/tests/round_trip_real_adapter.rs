@@ -5,7 +5,7 @@
 
 use bitcoin::hashes::Hash;
 use buzz_core::payment::{verify, Amount};
-use buzz_mock_wallet::{MockWallet, MockWalletConfig};
+use buzz_mock_wallet::{MockWallet, MockWalletConfig, Script};
 use buzz_wallet::{
     Bolt11, InvoiceStatus, NwcWalletConnector, WalletConnector, WalletError, WalletMethod,
     WalletService, WalletTimeouts,
@@ -98,6 +98,42 @@ async fn real_adapter_pay_receive_lookup_round_trip() {
 
     let settled = service.lookup_invoice(&hash).await.expect("lookup settled");
     assert_eq!(settled, InvoiceStatus::Settled);
+
+    wallet.shutdown();
+}
+
+/// Regression: wallets whose `get_info` advertises extension methods unknown
+/// to rust-nostr's strict `Method` enum (real Alby behavior: `sign_message`,
+/// `get_budget`) make the whole get_info response undeserializable. The
+/// connector must degrade to the kind-13194 advertisement instead of
+/// reporting a reachable wallet as [`WalletError::Unreachable`].
+#[tokio::test]
+async fn real_adapter_links_when_get_info_has_unknown_extension_methods() {
+    init_tracing();
+
+    let wallet = MockWallet::start(MockWalletConfig {
+        balance_msat: 1_000_000,
+        script: Script {
+            get_info_extra_methods: vec!["sign_message".into(), "get_budget".into()],
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .await
+    .expect("start mock with alby-like get_info extensions");
+
+    let connector = NwcWalletConnector::new(short_timeouts());
+    let (service, caps, _): (Arc<dyn WalletService>, _, _) = connector
+        .connect(wallet.uri())
+        .await
+        .expect("connect must fall back to 13194 advertisement");
+
+    assert!(
+        caps.contains(WalletMethod::MakeInvoice) && caps.contains(WalletMethod::PayInvoice),
+        "13194 fallback must carry full capabilities: {caps:?}"
+    );
+    let bal = service.get_balance().await.expect("get_balance");
+    assert_eq!(bal, Some(Amount::from_msat(1_000_000)));
 
     wallet.shutdown();
 }

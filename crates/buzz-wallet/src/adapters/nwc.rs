@@ -188,12 +188,20 @@ async fn fetch_advertisement(
     connect_timeout: Duration,
 ) -> Result<WalletAdvertisement, WalletError> {
     let info_13194 = fetch_methods_13194(parsed, connect_timeout).await?;
-    let info = client.get_info().await.map_err(map_query_error)?;
-    let get_info_methods: Vec<String> = info
-        .methods
-        .iter()
-        .map(|m| m.as_str().to_string())
-        .collect();
+    let get_info_methods: Vec<String> = match client.get_info().await {
+        Ok(info) => info
+            .methods
+            .iter()
+            .map(|m| m.as_str().to_string())
+            .collect(),
+        // Wallets that advertise NWC methods unknown to rust-nostr's strict
+        // `Method` enum (e.g. Alby's `sign_message` / `get_budget`) make the
+        // whole get_info response undeserializable. The 13194 info event is
+        // the canonical advertisement and parses leniently — degrade to it
+        // rather than calling a reachable wallet unreachable.
+        Err(NwcError::NIP47(Nip47Error::CantDeserializeResponse { .. })) => info_13194.clone(),
+        Err(e) => return Err(map_query_error(e)),
+    };
     Ok(Capabilities::from_advertisement_pair(
         info_13194,
         get_info_methods,

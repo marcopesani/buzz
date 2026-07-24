@@ -6,6 +6,9 @@ version = "0.4.23"
 description = "Buzz desktop app"
 authors = ["you"]
 edition = "2021"
+# wallet_e2e_harness (src/bin/) makes `cargo run` ambiguous; tauri dev relies
+# on plain `cargo run` resolving to the app binary.
+default-run = "buzz-desktop"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

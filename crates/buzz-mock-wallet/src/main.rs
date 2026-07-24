@@ -50,6 +50,7 @@ async fn main() {
         fail_next_pay_code: args.fail_next_pay,
         response_delay: Duration::from_millis(args.response_delay_ms),
         swallow_requests: args.swallow_requests,
+        ..Default::default()
     };
     let config = MockWalletConfig {
         balance_msat: args.balance_msat,

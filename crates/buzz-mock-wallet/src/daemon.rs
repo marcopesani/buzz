@@ -215,17 +215,21 @@ fn dispatch(
     }
 
     match request.params {
-        RequestParams::GetInfo => Ok(DispatchResult {
-            response_json: ok_envelope(
-                "get_info",
-                json!({
-                    "alias": "buzz-mock-wallet",
-                    "methods": methods,
-                    "notifications": ["payment_received"],
-                }),
-            ),
-            payment_received: None,
-        }),
+        RequestParams::GetInfo => {
+            let mut advertised: Vec<String> = methods.iter().map(|m| m.to_string()).collect();
+            advertised.extend(ledger.script().get_info_extra_methods);
+            Ok(DispatchResult {
+                response_json: ok_envelope(
+                    "get_info",
+                    json!({
+                        "alias": "buzz-mock-wallet",
+                        "methods": advertised,
+                        "notifications": ["payment_received"],
+                    }),
+                ),
+                payment_received: None,
+            })
+        }
         RequestParams::GetBalance => Ok(DispatchResult {
             response_json: ok_envelope("get_balance", json!({ "balance": ledger.balance_msat() })),
             payment_received: None,

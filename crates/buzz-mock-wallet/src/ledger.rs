@@ -41,6 +41,12 @@ pub struct Script {
     pub response_delay: std::time::Duration,
     /// When true, the daemon swallows requests (no 23195).
     pub swallow_requests: bool,
+    /// Extra method names appended to the `get_info` response only.
+    ///
+    /// Mirrors real wallets (e.g. Alby: `sign_message`, `get_budget`) whose
+    /// extension methods are unknown to strict NIP-47 client enums and make
+    /// the whole `get_info` response undeserializable for them.
+    pub get_info_extra_methods: Vec<String>,
 }
 
 /// Shared msat ledger.
