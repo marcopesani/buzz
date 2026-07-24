@@ -105,6 +105,7 @@ export default defineConfig({
         "**/wallet-screenshots.spec.ts",
         "**/wallet-experiment-gate.spec.ts",
         "**/wallet-request-dialog.spec.ts",
+        "**/wallet-receipt.spec.ts",
         "**/wallet-live-fullscreen.spec.ts",
         "**/wallet-real-money.spec.ts",
         "**/global-agent-config-screenshots.spec.ts",

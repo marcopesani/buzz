@@ -239,6 +239,8 @@ type MockBridgeOptions = {
   sendMessageErrors?: string[];
   /** Reject successive kind-40009 publishes with these messages, then resume. */
   paymentRequestPublishErrors?: string[];
+  /** Reject successive kind-40010 publishes with these messages, then resume. */
+  paymentReceiptPublishErrors?: string[];
   /** Reject successive managed-agent starts, then resume. */
   startManagedAgentErrors?: string[];
   /** Delay (ms) after snapshotting a thread-replies page so E2E tests can

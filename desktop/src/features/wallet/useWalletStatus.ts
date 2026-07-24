@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { reconcileAndFlushReceipts } from "./reconcileWalletReceipts";
 import {
   getWalletStatusCache,
   getWalletStatusEpoch,
@@ -57,6 +58,13 @@ export function useWalletStatus() {
     }, 500);
     return () => window.clearInterval(id);
   }, [refresh]);
+
+  // Piggyback receipt outbox flush on the existing wallet-status cadence
+  // (mount / link) — no dedicated timer. Only when linked.
+  useEffect(() => {
+    if (!status.linked) return;
+    void reconcileAndFlushReceipts();
+  }, [status.linked]);
 
   return { status, loading, error, refresh };
 }

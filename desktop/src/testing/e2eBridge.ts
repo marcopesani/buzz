@@ -225,6 +225,8 @@ type E2eConfig = {
     sendMessageErrors?: string[];
     /** Reject successive kind-40009 publishes with these messages, then resume. */
     paymentRequestPublishErrors?: string[];
+    /** Reject successive kind-40010 publishes with these messages, then resume. */
+    paymentReceiptPublishErrors?: string[];
     /** Reject successive managed-agent starts, then resume. */
     startManagedAgentErrors?: string[];
     /** Delay (ms) after snapshotting a thread-replies page so E2E tests can
@@ -1030,6 +1032,11 @@ declare global {
       channelName: string;
       kind?: number;
     }) => boolean;
+    /** Count events of `kind` in a mock channel's durable message store. */
+    __BUZZ_E2E_MOCK_KIND_COUNT__?: (input: {
+      channelName: string;
+      kind: number;
+    }) => number;
     __BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?: (input: {
       ownerPubkey: string;
       kind: number;
@@ -1211,6 +1218,7 @@ const CHANNEL_WINDOW_AUX_KINDS = new Set([
   KIND_DELETION,
   KIND_NIP29_DELETION,
   KIND_STREAM_MESSAGE_EDIT,
+  40010, // payment receipt — aux `#e` join onto 40009 rows
 ]);
 const CHANNEL_WINDOW_AUX_DELETION_KINDS = new Set([
   KIND_DELETION,
@@ -4376,6 +4384,7 @@ const TIMELINE_KINDS = new Set([
   9,
   40002,
   40008,
+  40009, // payment request (own timeline row)
   40099,
   43001,
   43002,
@@ -8885,6 +8894,23 @@ function sendToMockSocket(args: {
 
     const channelId = filter["#h"]?.[0];
     if (!channelId) {
+      // Id lookups (e.g. resolve 40009 for a receipt) span all channel stores.
+      const filterIds = filter.ids;
+      if (Array.isArray(filterIds) && filterIds.length > 0) {
+        const wanted = new Set(filterIds.map((id) => id.toLowerCase()));
+        for (const events of mockMessages.values()) {
+          for (const event of events) {
+            if (filter.kinds && !filter.kinds.includes(event.kind)) {
+              continue;
+            }
+            if (wanted.has(event.id.toLowerCase())) {
+              sendWsText(socket.handler, ["EVENT", subId, event]);
+            }
+          }
+        }
+        sendWsText(socket.handler, ["EOSE", subId]);
+        return;
+      }
       // Aux-backfill filters (reactions/deletions) are `#e`-keyed with no
       // channel tag — serve them across all channel stores like the relay.
       const referencedIds = filter["#e"];
@@ -9047,6 +9073,20 @@ function sendToMockSocket(args: {
       return;
     }
 
+    const paymentReceiptPublishError =
+      event.kind === 40010
+        ? getConfig()?.mock?.paymentReceiptPublishErrors?.shift()
+        : null;
+    if (paymentReceiptPublishError) {
+      sendWsText(socket.handler, [
+        "OK",
+        event.id,
+        false,
+        paymentReceiptPublishError,
+      ]);
+      return;
+    }
+
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     sendWsText(socket.handler, ["OK", event.id, true, ""]);
@@ -9146,6 +9186,17 @@ export function maybeInstallE2eTauriMocks() {
     }
 
     return hasMockLiveSubscription(channel.id, kind);
+  };
+  window.__BUZZ_E2E_MOCK_KIND_COUNT__ = ({ channelName, kind }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+    return getMockMessageStore(channel.id).filter(
+      (event) => event.kind === kind,
+    ).length;
   };
   window.__BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__ = ({
     ownerPubkey,

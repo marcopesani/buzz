@@ -28,6 +28,10 @@ import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
+import {
+  initReceiptOutbox,
+  resetReceiptOutbox,
+} from "@/features/wallet/receiptOutboxStore";
 import { resetWalletState } from "@/features/wallet/walletState";
 
 import {
@@ -65,6 +69,7 @@ function resetCommunityState({
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
   resetWalletState();
+  resetReceiptOutbox();
 }
 
 type CommunityInitResult =
@@ -258,6 +263,7 @@ export function useCommunityInit(
             err,
           );
         }
+        initReceiptOutbox(activeCommunity.id);
         // Restore any turn state saved for this community (a prior A→B round-
         // trip). This runs after applyCommunity succeeds and before the app
         // renders so components see the restored timers on first render.

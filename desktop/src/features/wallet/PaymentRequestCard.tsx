@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Check, Zap } from "lucide-react";
 
 import type { TimelineMessage } from "@/features/messages/types";
+import { getChannelIdFromTags } from "@/features/messages/lib/threading";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/cn";
@@ -71,6 +72,7 @@ export function PaymentRequestCard({ message }: PaymentRequestCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [prepareError, setPrepareError] = useState<string | null>(null);
+  const channelId = getChannelIdFromTags(message.tags ?? []) ?? "";
 
   const handlePay = async () => {
     if (parsed.amountMsat == null) return;
@@ -109,6 +111,7 @@ export function PaymentRequestCard({ message }: PaymentRequestCardProps) {
         state.kind === "expired" && "opacity-70",
       )}
       data-pay-card-state={state.kind}
+      data-has-receipt={message.paymentReceipt ? "1" : "0"}
       data-testid="payment-request-card"
     >
       <div className="flex items-start gap-3">
@@ -171,6 +174,9 @@ export function PaymentRequestCard({ message }: PaymentRequestCardProps) {
       <ConfirmSendDialog
         onOpenChange={setConfirmOpen}
         open={confirmOpen}
+        payRequest={
+          channelId ? { requestEventId: message.id, channelId } : null
+        }
         quote={quote}
       />
     </div>

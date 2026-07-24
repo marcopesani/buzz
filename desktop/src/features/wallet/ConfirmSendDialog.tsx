@@ -14,18 +14,28 @@ import { Spinner } from "@/shared/ui/spinner";
 
 import { msatToSatsDisplay } from "./msat";
 import {
+  enqueueAndPublishReceipt,
+  reconcileAndFlushReceipts,
+} from "./reconcileWalletReceipts";
+import {
   walletCancel,
   walletConfirm,
-  walletReconcile,
   type PrepareSendQuote,
   type SendConfirmOutcome,
 } from "./walletApi";
+
+export type ConfirmSendPayRequestContext = {
+  requestEventId: string;
+  channelId: string;
+};
 
 export type ConfirmSendDialogProps = {
   open: boolean;
   quote: PrepareSendQuote | null;
   onOpenChange: (open: boolean) => void;
   onSettled?: (preimage: string) => void;
+  /** When set, a settled confirm enqueues+publishes a 40010 for this request. */
+  payRequest?: ConfirmSendPayRequestContext | null;
 };
 
 type Phase =
@@ -43,6 +53,7 @@ export function ConfirmSendDialog({
   quote,
   onOpenChange,
   onSettled,
+  payRequest = null,
 }: ConfirmSendDialogProps) {
   const [phase, setPhase] = useState<Phase>({ kind: "ready" });
 
@@ -84,13 +95,29 @@ export function ConfirmSendDialog({
         setPhase({ kind: "settled", preimage: outcome.preimage });
         toast.success("Payment settled");
         onSettled?.(outcome.preimage);
+        if (payRequest) {
+          // Fire-and-forget: outbox is durable and retries on reconcile.
+          // Never block or fail the confirm UI on a decorative receipt.
+          void enqueueAndPublishReceipt({
+            requestEventId: payRequest.requestEventId,
+            paymentHash: quote.payment_hash,
+            preimage: outcome.preimage,
+            amountMsat: quote.amount_msat,
+            channelId: payRequest.channelId,
+          }).catch((err) => {
+            console.warn(
+              "[wallet-receipt] publish after settle failed:",
+              err instanceof Error ? err.message : String(err),
+            );
+          });
+        }
         break;
       case "failed":
         setPhase({ kind: "failed", reason: outcome.reason });
         break;
       case "unknown":
         setPhase({ kind: "unknown" });
-        void walletReconcile();
+        void reconcileAndFlushReceipts();
         break;
       case "already_claimed":
         setPhase({
@@ -198,7 +225,7 @@ export function ConfirmSendDialog({
           {phase.kind === "unknown" ? (
             <Button
               data-testid="wallet-confirm-reconcile"
-              onClick={() => void walletReconcile()}
+              onClick={() => void reconcileAndFlushReceipts()}
               type="button"
               variant="outline"
             >

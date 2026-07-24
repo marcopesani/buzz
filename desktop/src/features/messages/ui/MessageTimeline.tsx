@@ -3,6 +3,7 @@ import * as React from "react";
 import {
   isDeferredTimelineSnapshotStale,
   isRenderedTimelineBehindHistoryPrepend,
+  overlayLiveTimelineAuxFields,
   selectTimelineBodySurface,
   selectTimelineIntroSurface,
 } from "@/features/messages/lib/timelineSnapshot";
@@ -239,6 +240,13 @@ const MessageTimelineBase = React.forwardRef<
     EMPTY_TIMELINE_SNAPSHOT,
   );
   const deferredMessages = deferredSnapshot.messages;
+  // Decorative paymentReceipt on existing 40009 rows must not wait for
+  // deferred commit — a confirm dialog (urgent) can leave Paid ✓ stuck.
+  // Overlay is a no-op (same array ref) unless a live receipt differs.
+  const deferredMessagesWithLiveAux = React.useMemo(
+    () => overlayLiveTimelineAuxFields(deferredMessages, messages),
+    [deferredMessages, messages],
+  );
   const imagePreloadStateRef = React.useRef({
     activeImages: new Set<HTMLImageElement>(),
     requestedUrls: new Set<string>(),
@@ -271,7 +279,7 @@ const MessageTimelineBase = React.forwardRef<
   }, [scrollContainerRef, scrollContainerDomKey]);
 
   const timelineBodySurface = selectTimelineBodySurface({
-    deferredCount: deferredMessages.length,
+    deferredCount: deferredMessagesWithLiveAux.length,
     hasPersistentIntro: channelIntro !== null || directMessageIntro !== null,
     isLoading: isLoading || isDeferredSnapshotStale,
     liveCount: messages.length,
@@ -294,7 +302,7 @@ const MessageTimelineBase = React.forwardRef<
       isSemanticallyAtBottom ||
       targetMessageId !== null ||
       searchActiveMessageId !== null,
-    messages: deferredMessages,
+    messages: deferredMessagesWithLiveAux,
   });
   // Hold older-page render commits until the scroller is at rest: WKWebView
   // can drop scrollTop compensation writes during live trackpad momentum.
@@ -567,7 +575,9 @@ const MessageTimelineBase = React.forwardRef<
   const timelineSkeletonRows = useTimelineSkeletonRows({
     channelId,
     isLoading: showTimelineSkeleton,
-    messages: showTimelineSkeleton ? EMPTY_MESSAGES : deferredMessages,
+    messages: showTimelineSkeleton
+      ? EMPTY_MESSAGES
+      : deferredMessagesWithLiveAux,
   });
 
   const virtualizedLeadingContent = React.useMemo(

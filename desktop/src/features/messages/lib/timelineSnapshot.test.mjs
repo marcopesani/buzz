@@ -8,6 +8,7 @@ import {
   isDeferredTimelineSnapshotStale,
   isNearBottomMetrics,
   isRenderedTimelineBehindHistoryPrepend,
+  overlayLiveTimelineAuxFields,
   resolveDeepLinkTarget,
   selectDeferredListRenderState,
   selectLatestMessageAutoScrollBehavior,
@@ -594,4 +595,109 @@ test("isRenderedTimelineBehindHistoryPrepend: false when rendered oldest already
   // Rendered shorter than live but oldest unchanged (e.g. a newer live append):
   // not behind an older-history prepend.
   assert.equal(isRenderedTimelineBehindHistoryPrepend([a], [a, b]), false);
+});
+
+test("overlayLiveTimelineAuxFields: copies paymentReceipt from live onto deferred row", () => {
+  const deferred = [
+    message({ id: "req", kind: 40009, paymentReceipt: null }),
+    message({ id: "other", kind: 9 }),
+  ];
+  const live = [
+    message({
+      id: "req",
+      kind: 40009,
+      paymentReceipt: { id: "receipt", createdAt: 1 },
+    }),
+    message({ id: "other", kind: 9 }),
+    message({ id: "brand-new", kind: 9 }),
+  ];
+  const overlaid = overlayLiveTimelineAuxFields(deferred, live);
+  assert.equal(overlaid.length, 2);
+  assert.deepEqual(overlaid[0].paymentReceipt, {
+    id: "receipt",
+    createdAt: 1,
+  });
+  assert.equal(overlaid[1].id, "other");
+  // New live rows are not admitted — only in-place receipt overlays.
+  assert.equal(
+    overlaid.some((row) => row.id === "brand-new"),
+    false,
+  );
+});
+
+test("overlayLiveTimelineAuxFields: no-op when aux already matches", () => {
+  const receipt = { id: "receipt", createdAt: 1 };
+  const deferred = [
+    message({ id: "req", kind: 40009, paymentReceipt: receipt }),
+  ];
+  const live = [message({ id: "req", kind: 40009, paymentReceipt: receipt })];
+  assert.equal(overlayLiveTimelineAuxFields(deferred, live), deferred);
+});
+
+test("overlayLiveTimelineAuxFields: fresh reaction identities do not allocate", () => {
+  // formatTimelineMessages rebuilds reaction arrays every ingest — identity
+  // differs while values match. Even when live has a receipt overlay present
+  // (so the map runs), matching receipt ids must return the deferred array ref.
+  const reaction = {
+    emoji: "👍",
+    count: 1,
+    reactedByCurrentUser: false,
+    users: [{ pubkey: "aa".repeat(32), displayName: "Alice", avatarUrl: null }],
+  };
+  const receipt = { id: "receipt", createdAt: 1 };
+  const deferred = [
+    message({ id: "chat", kind: 9, reactions: [reaction] }),
+    message({ id: "req", kind: 40009, paymentReceipt: receipt }),
+  ];
+  const live = [
+    message({
+      id: "chat",
+      kind: 9,
+      reactions: [{ ...reaction, users: [...reaction.users] }],
+    }),
+    message({ id: "req", kind: 40009, paymentReceipt: { ...receipt } }),
+  ];
+  assert.notEqual(deferred[0].reactions, live[0].reactions);
+  assert.notEqual(deferred[1].paymentReceipt, live[1].paymentReceipt);
+  assert.equal(overlayLiveTimelineAuxFields(deferred, live), deferred);
+});
+
+test("overlayLiveTimelineAuxFields: paymentReceipt patch preserves deferred row fields", () => {
+  const deferred = [
+    message({
+      id: "req",
+      kind: 40009,
+      body: "deferred-body",
+      author: "Alice",
+      paymentReceipt: null,
+      reactions: [
+        {
+          emoji: "⚡",
+          count: 2,
+          reactedByCurrentUser: true,
+          users: [],
+        },
+      ],
+    }),
+  ];
+  const live = [
+    message({
+      id: "req",
+      kind: 40009,
+      body: "live-body-must-not-leak",
+      author: "Bob",
+      paymentReceipt: { id: "receipt", createdAt: 42 },
+      reactions: undefined,
+    }),
+  ];
+  const overlaid = overlayLiveTimelineAuxFields(deferred, live);
+  assert.notEqual(overlaid, deferred);
+  assert.equal(overlaid[0].body, "deferred-body");
+  assert.equal(overlaid[0].author, "Alice");
+  assert.deepEqual(overlaid[0].reactions, deferred[0].reactions);
+  assert.equal(overlaid[0].reactions, deferred[0].reactions);
+  assert.deepEqual(overlaid[0].paymentReceipt, {
+    id: "receipt",
+    createdAt: 42,
+  });
 });
