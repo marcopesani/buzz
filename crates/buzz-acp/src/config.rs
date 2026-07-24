@@ -480,6 +480,12 @@ pub struct ChannelFilter {
     pub kinds: Option<Vec<u32>>,
     /// Whether to include `#p` tag filter for agent pubkey.
     pub require_mention: bool,
+    /// When true, the channel REQ also OR's a second filter for kind 40010
+    /// without `#p` — receipts carry no payee mention tag.
+    ///
+    /// Set only for wallet-provisioned agents. Wallet-less agents leave this
+    /// false so subscription shape is unchanged.
+    pub include_payment_receipts: bool,
 }
 
 #[derive(Debug)]
@@ -552,6 +558,12 @@ pub struct Config {
     /// `from_cli()`. `None` when using the compiled-in default or when
     /// `--no-base-prompt` is set.
     pub base_prompt_content: Option<String>,
+    /// Whether `BUZZ_NWC_URI` was present (non-empty) at harness startup.
+    ///
+    /// Gates payment-receipt subscription, wake handling, heartbeat nudge,
+    /// and the wallet section of the base prompt. Resolved once in
+    /// [`Config::from_cli`] so tests can override without mutating process env.
+    pub wallet_provisioned: bool,
 }
 
 /// Validate and deduplicate allowlist entries: each must be exactly 64 hex chars.
@@ -1003,6 +1015,7 @@ impl Config {
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
+            wallet_provisioned: crate::payment_receipt::env_wallet_provisioned(),
         };
 
         Ok(config)
@@ -1151,6 +1164,7 @@ pub fn resolve_channel_filters(
     };
 
     let mut result = HashMap::new();
+    let wallet = config.wallet_provisioned;
 
     match config.subscribe_mode {
         SubscribeMode::Mentions => {
@@ -1168,6 +1182,7 @@ pub fn resolve_channel_filters(
                     ChannelFilter {
                         kinds: Some(kinds.clone()),
                         require_mention,
+                        include_payment_receipts: wallet,
                     },
                 );
             }
@@ -1179,6 +1194,10 @@ pub fn resolve_channel_filters(
                     ChannelFilter {
                         kinds: config.kinds_override.clone(),
                         require_mention: false,
+                        // Wildcard already delivers 40010; still set the flag so
+                        // send_subscribe can skip a redundant OR filter when
+                        // kinds is None, and add one when kinds are narrowed.
+                        include_payment_receipts: wallet,
                     },
                 );
             }
@@ -1214,6 +1233,7 @@ pub fn resolve_channel_filters(
                         ChannelFilter {
                             kinds: merged_kinds,
                             require_mention,
+                            include_payment_receipts: wallet,
                         },
                     );
                 }
@@ -1257,6 +1277,7 @@ pub fn resolve_dynamic_channel_filter(
         }
     }
 
+    let wallet = config.wallet_provisioned;
     match config.subscribe_mode {
         SubscribeMode::Mentions => Some(ChannelFilter {
             kinds: Some(config.kinds_override.clone().unwrap_or_else(|| {
@@ -1267,10 +1288,12 @@ pub fn resolve_dynamic_channel_filter(
                 ]
             })),
             require_mention: !config.no_mention_filter,
+            include_payment_receipts: wallet,
         }),
         SubscribeMode::All => Some(ChannelFilter {
             kinds: config.kinds_override.clone(),
             require_mention: false,
+            include_payment_receipts: wallet,
         }),
         SubscribeMode::Config => {
             // Same merge logic as resolve_channel_filters() Config branch:
@@ -1308,6 +1331,7 @@ pub fn resolve_dynamic_channel_filter(
             Some(ChannelFilter {
                 kinds: merged_kinds,
                 require_mention,
+                include_payment_receipts: wallet,
             })
         }
     }
@@ -1372,6 +1396,7 @@ mod tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            wallet_provisioned: false,
         }
     }
 
@@ -1409,7 +1434,31 @@ mod tests {
             assert!(kinds.contains(&buzz_core::kind::KIND_STREAM_MESSAGE));
             assert!(kinds.contains(&buzz_core::kind::KIND_WORKFLOW_APPROVAL_REQUESTED));
             assert!(kinds.contains(&buzz_core::kind::KIND_STREAM_REMINDER));
+            assert!(
+                !f.include_payment_receipts,
+                "wallet-less agents must not subscribe to 40010"
+            );
+            assert!(
+                !kinds.contains(&buzz_core::kind::KIND_PAYMENT_RECEIPT),
+                "default mention kinds must not include 40010"
+            );
         }
+    }
+
+    #[test]
+    fn test_mentions_mode_wallet_enables_payment_receipt_subscription() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.wallet_provisioned = true;
+        let channels = vec![Uuid::new_v4()];
+        let result = resolve_channel_filters(&config, &channels, &[]);
+        let f = result.get(&channels[0]).expect("channel present");
+        assert!(
+            f.include_payment_receipts,
+            "wallet-provisioned agents subscribe to 40010 via OR filter"
+        );
+        // Primary kinds stay mention-scoped; 40010 rides the second filter.
+        let kinds = f.kinds.as_ref().expect("kinds");
+        assert!(!kinds.contains(&buzz_core::kind::KIND_PAYMENT_RECEIPT));
     }
 
     #[test]
