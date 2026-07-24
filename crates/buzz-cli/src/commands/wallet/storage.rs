@@ -5,7 +5,10 @@
 //! by relay URL (community boundary). Neither path ever logs secret material.
 
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

@@ -1,6 +1,10 @@
 /**
  * Live wallet fullscreen screenshots — REAL WalletRuntime → NWC → buzz-mock-wallet.
  *
+ * Opt-in local artifact (skipped in CI). Requires Tauri native deps to build the
+ * Rust harness. Run with:
+ *   BUZZ_LIVE_WALLET_E2E=1 pnpm exec playwright test tests/e2e/wallet-live-fullscreen.spec.ts
+ *
  * Harness mechanism:
  * 1. `cargo build --manifest-path desktop/src-tauri/Cargo.toml --bin wallet_e2e_harness`
  * 2. Spawn the binary with RUST_LOG; wait until GET http://127.0.0.1:4189/uri works
@@ -18,15 +22,27 @@ import {
   writeFileSync,
   existsSync,
   createWriteStream,
+  readdirSync,
+  readFileSync,
   type WriteStream,
 } from "node:fs";
 import path from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 import { waitForAnimations } from "../helpers/animations";
+
+// Skip the whole file (including beforeAll harness build) unless explicitly enabled.
+test.skip(
+  !process.env.BUZZ_LIVE_WALLET_E2E,
+  "live wallet harness — set BUZZ_LIVE_WALLET_E2E=1 to run locally",
+);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../..");
@@ -66,7 +82,6 @@ async function waitForHarnessReady(timeoutMs = 60_000) {
 }
 
 async function buildHarness() {
-  const { spawnSync } = await import("node:child_process");
   const result = spawnSync(
     "cargo",
     [
@@ -154,7 +169,6 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   stopHarness();
 
-  const { readdirSync, readFileSync } = await import("node:fs");
   const files = readdirSync(OUT_DIR)
     .filter((f) => f.endsWith(".png"))
     .sort();
